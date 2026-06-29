@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 html,
@@ -14,92 +14,69 @@ body,
 
 body {
   margin: 0;
-  background: radial-gradient(1200px 800px at 80% -10%, rgba(26, 168, 99, 0.12), transparent 60%),
-    radial-gradient(900px 700px at -10% 110%, rgba(14, 165, 233, 0.1), transparent 55%), #070b14;
-  color: #e6edf7;
+  background-color: #f5f4f0;
+  background-image:
+    radial-gradient(900px 600px at 85% -5%,  rgba(34,197,94,0.07), transparent 60%),
+    radial-gradient(700px 500px at -5% 105%, rgba(59,130,246,0.06), transparent 55%);
+  color: #3d3b35;
   font-family: "Tajawal", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #273456 transparent;
+  scrollbar-color: #ccc9c0 transparent;
 }
-
-*::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-*::-webkit-scrollbar-thumb {
-  background: #1c2742;
-  border-radius: 999px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-}
-*::-webkit-scrollbar-thumb:hover {
-  background: #273456;
-  background-clip: padding-box;
-}
+*::-webkit-scrollbar          { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb    { background: #d4d1c8; border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: #bbb8b0; background-clip: padding-box; }
 
 @layer components {
   .card {
-    @apply rounded-2xl border border-ink-700/70 bg-ink-900/70 backdrop-blur-sm shadow-card;
+    @apply rounded-2xl border border-surface-300 bg-white shadow-card;
   }
   .card-soft {
-    @apply rounded-xl border border-ink-700/60 bg-ink-850/60;
+    @apply rounded-xl border border-surface-200 bg-surface-50;
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-150 select-none;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-150 select-none cursor-pointer;
   }
   .btn-primary {
-    @apply btn bg-brand-500 text-white hover:bg-brand-400 active:scale-[0.98] shadow-glow;
+    @apply btn bg-brand-600 text-white hover:bg-brand-500 active:scale-[0.98] shadow-soft;
   }
   .btn-ghost {
-    @apply btn bg-ink-700/50 text-slate-200 hover:bg-ink-600/60 border border-ink-600/60;
+    @apply btn bg-surface-100 text-surface-700 hover:bg-surface-200 border border-surface-300;
   }
   .btn-danger {
-    @apply btn bg-danger-500/90 text-white hover:bg-danger-400 active:scale-[0.98];
+    @apply btn bg-danger-500 text-white hover:bg-danger-400 active:scale-[0.98];
   }
   .btn-warn {
-    @apply btn bg-warn-500 text-ink-950 hover:bg-warn-400 active:scale-[0.98];
+    @apply btn bg-warn-500 text-white hover:bg-warn-400 active:scale-[0.98];
   }
   .chip {
-    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium;
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold;
   }
   .field {
-    @apply w-full rounded-xl border border-ink-600/70 bg-ink-850/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-500/30;
+    @apply w-full rounded-xl border border-surface-300 bg-white px-3.5 py-2.5 text-sm text-surface-800
+           placeholder:text-surface-400 outline-none transition
+           focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 shadow-soft;
   }
   .label {
-    @apply mb-1.5 block text-xs font-medium text-slate-400;
+    @apply mb-1.5 block text-xs font-semibold text-surface-600;
   }
   .row-hover {
-    @apply transition-colors hover:bg-ink-700/40;
+    @apply transition-colors hover:bg-surface-50;
   }
 }
 
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-.animate-fade {
-  animation: fadeIn 0.22s ease-out both;
-}
+.animate-fade { animation: fadeIn 0.2s ease-out both; }
 
 @keyframes pulseGlow {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(26, 168, 99, 0.5);
-  }
-  50% {
-    box-shadow: 0 0 0 6px rgba(26, 168, 99, 0);
-  }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(34,197,94,0); }
 }
-.animate-pulse-glow {
-  animation: pulseGlow 1.8s ease-in-out infinite;
-}
+.animate-pulse-glow { animation: pulseGlow 1.8s ease-in-out infinite; }
