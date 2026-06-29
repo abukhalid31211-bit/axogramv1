@@ -1,19 +1,18 @@
 import { useState } from "react";
 import { BarChart3, FileText, FileBarChart, AlertTriangle, Upload, Calendar } from "lucide-react";
 import { useNav } from "../nav";
-import { PageHeader, Button, Table, SectionTitle, Alert, useToast, EmptyState, StatCard } from "../ui";
+import { PageHeader, Button, Table, SectionTitle, useToast, StatCard } from "../ui";
 import { logs, addLogs, errorLogs } from "../data";
 
 export function ReportsModule() {
   const { push } = useNav();
-  const { show, node } = useToast();
   const items = [
-    { id: "today", label: "تقرير اليوم", desc: "إحصائيات اليوم", icon: BarChart3 },
-    { id: "week", label: "تقرير أسبوعي", desc: "7 أيام + رسم بياني", icon: Calendar },
-    { id: "gather-log", label: "سجل التجميع", desc: "تاريخ التجميع", icon: FileText },
-    { id: "add-log", label: "سجل الإضافة", desc: "تاريخ الإضافة", icon: FileBarChart },
-    { id: "errors", label: "سجل الأخطاء", desc: "أخطاء وحلول", icon: AlertTriangle },
-    { id: "export", label: "تصدير تقرير", desc: "PDF/TXT/CSV", icon: Upload },
+    { id: "today",      label: "تقرير اليوم",     desc: "إحصائيات اليوم",       icon: BarChart3     },
+    { id: "week",       label: "تقرير أسبوعي",    desc: "7 أيام + رسم بياني",   icon: Calendar      },
+    { id: "gather-log", label: "سجل التجميع",      desc: "تاريخ التجميع",        icon: FileText      },
+    { id: "add-log",    label: "سجل الإضافة",      desc: "تاريخ الإضافة",        icon: FileBarChart  },
+    { id: "errors",     label: "سجل الأخطاء",      desc: "أخطاء وحلول",          icon: AlertTriangle },
+    { id: "export",     label: "تصدير تقرير",      desc: "PDF/TXT/CSV",          icon: Upload        },
   ];
   return (
     <div className="animate-fade">
@@ -22,32 +21,27 @@ export function ReportsModule() {
         {items.map((it) => {
           const Icon = it.icon;
           return (
-            <button key={it.id} onClick={() => push(["reports", it.id])} className="card flex items-center gap-3 p-4 text-right hover:border-brand-500/40 hover:shadow-glow">
-              <div className="grid h-10 w-10 place-items-center rounded-lg bg-accent-500/10 text-accent-400 ring-1 ring-accent-500/30">
-                <Icon className="h-5 w-5" />
-              </div>
-              <div>
-                <div className="text-sm font-bold text-white">{it.label}</div>
-                <div className="text-xs text-slate-400">{it.desc}</div>
-              </div>
+            <button key={it.id} onClick={() => push(["reports", it.id])}
+              className="card flex items-center gap-3 p-4 text-right transition hover:-translate-y-0.5 hover:border-accent-300 hover:shadow-pop">
+              <div className="grid h-10 w-10 place-items-center rounded-lg bg-accent-50 text-accent-600 ring-1 ring-accent-200"><Icon className="h-5 w-5" /></div>
+              <div><div className="text-sm font-bold text-surface-800">{it.label}</div><div className="text-xs text-surface-500">{it.desc}</div></div>
             </button>
           );
         })}
       </div>
-      {node}
     </div>
   );
 }
 
 export function ReportsScreen({ sub }: { sub: string }) {
   switch (sub) {
-    case "today": return <TodayReport />;
-    case "week": return <WeekReport />;
+    case "today":      return <TodayReport />;
+    case "week":       return <WeekReport />;
     case "gather-log": return <GatherLog />;
-    case "add-log": return <AddLog />;
-    case "errors": return <ErrorLog />;
-    case "export": return <ExportReport />;
-    default: return null;
+    case "add-log":    return <AddLog />;
+    case "errors":     return <ErrorLog />;
+    case "export":     return <ExportReport />;
+    default:           return null;
   }
 }
 
@@ -84,7 +78,7 @@ function TodayReport() {
 function WeekReport() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const days = ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"];
+  const days   = ["السبت","الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة"];
   const values = [40, 65, 50, 80, 70, 90, 60];
   return (
     <div className="animate-fade">
@@ -95,7 +89,7 @@ function WeekReport() {
           {days.map((d, i) => (
             <div key={d} className="flex flex-1 flex-col items-center gap-2">
               <div className="w-full rounded-t-lg bg-gradient-to-t from-brand-600 to-brand-400 transition-all" style={{ height: `${values[i] * 1.6}px` }} />
-              <span className="text-xs text-slate-400">{d}</span>
+              <span className="text-xs text-surface-500">{d}</span>
             </div>
           ))}
         </div>
@@ -114,7 +108,7 @@ function GatherLog() {
   return (
     <div className="animate-fade">
       <PageHeader title="سجل التجميع" icon={<FileText className="h-5 w-5" />} />
-      <Table columns={["تاريخ", "مجموعة", "مستخرج", "ملف"]} rows={logs.map((l) => [l.date, l.group, l.extracted.toLocaleString(), l.file])} />
+      <Table columns={["تاريخ","مجموعة","مستخرج","ملف"]} rows={logs.map((l) => [l.date, l.group, l.extracted.toLocaleString(), l.file])} />
       <div className="mt-4"><Button onClick={() => push(["reports"])}>رجوع</Button></div>
     </div>
   );
@@ -125,7 +119,9 @@ function AddLog() {
   return (
     <div className="animate-fade">
       <PageHeader title="سجل الإضافة" icon={<FileBarChart className="h-5 w-5" />} />
-      <Table columns={["تاريخ", "ملف", "هدف", "ناجح", "فاشل"]} rows={addLogs.map((l) => [l.date, l.file, l.target, <span className="text-brand-300">{l.success.toLocaleString()}</span>, <span className="text-danger-400">{l.fail.toLocaleString()}</span>])} />
+      <Table columns={["تاريخ","ملف","هدف","ناجح","فاشل"]} rows={addLogs.map((l) => [l.date, l.file, l.target,
+        <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">{l.success.toLocaleString()}</span>,
+        <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">{l.fail.toLocaleString()}</span>])} />
       <div className="mt-4"><Button onClick={() => push(["reports"])}>رجوع</Button></div>
     </div>
   );
@@ -136,7 +132,10 @@ function ErrorLog() {
   return (
     <div className="animate-fade">
       <PageHeader title="سجل الأخطاء" icon={<AlertTriangle className="h-5 w-5" />} />
-      <Table columns={["وقت", "خطأ", "حساب", "حل"]} rows={errorLogs.map((e) => [e.time, <span className="text-danger-400">{e.error}</span>, e.account, <span className="text-brand-300">{e.fix}</span>])} />
+      <Table columns={["وقت","خطأ","حساب","حل"]} rows={errorLogs.map((e) => [e.time,
+        <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">{e.error}</span>,
+        e.account,
+        <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">{e.fix}</span>])} />
       <div className="mt-4"><Button onClick={() => push(["reports"])}>رجوع</Button></div>
     </div>
   );
