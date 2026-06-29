@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(1200px 800px at 80% -10%, rgba(26, 168, 99, 0.12), transparent 60%),
+    radial-gradient(900px 700px at -10% 110%, rgba(14, 165, 233, 0.1), transparent 55%), #070b14;
+  color: #e6edf7;
+  font-family: "Tajawal", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #273456 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #1c2742;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #273456;
+  background-clip: padding-box;
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-ink-700/70 bg-ink-900/70 backdrop-blur-sm shadow-card;
+  }
+  .card-soft {
+    @apply rounded-xl border border-ink-700/60 bg-ink-850/60;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-150 select-none;
+  }
+  .btn-primary {
+    @apply btn bg-brand-500 text-white hover:bg-brand-400 active:scale-[0.98] shadow-glow;
+  }
+  .btn-ghost {
+    @apply btn bg-ink-700/50 text-slate-200 hover:bg-ink-600/60 border border-ink-600/60;
+  }
+  .btn-danger {
+    @apply btn bg-danger-500/90 text-white hover:bg-danger-400 active:scale-[0.98];
+  }
+  .btn-warn {
+    @apply btn bg-warn-500 text-ink-950 hover:bg-warn-400 active:scale-[0.98];
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium;
+  }
+  .field {
+    @apply w-full rounded-xl border border-ink-600/70 bg-ink-850/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-500/30;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-medium text-slate-400;
+  }
+  .row-hover {
+    @apply transition-colors hover:bg-ink-700/40;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade {
+  animation: fadeIn 0.22s ease-out both;
+}
+
+@keyframes pulseGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(26, 168, 99, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(26, 168, 99, 0);
+  }
+}
+.animate-pulse-glow {
+  animation: pulseGlow 1.8s ease-in-out infinite;
+}
