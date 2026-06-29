@@ -1,19 +1,19 @@
 import { useState } from "react";
 import { Globe, Plus, FileText, ListChecks, ShieldCheck, Link2, Zap, Trash2 } from "lucide-react";
 import { useNav } from "../nav";
-import { PageHeader, Button, Field, OptionButton, Progress, Table, SectionTitle, Alert, ConfirmDialog, useToast, StatusChip } from "../ui";
+import { PageHeader, Button, OptionButton, Progress, Table, SectionTitle, Alert, ConfirmDialog, useToast, StatusChip, InlineEdit } from "../ui";
 import { proxies } from "../data";
 
 export function ProxyModule() {
   const { push } = useNav();
   const items = [
-    { id: "add", label: "إضافة بروكسي جديد", desc: "SOCKS5/4/HTTP/MTProto", icon: Plus },
-    { id: "import", label: "استيراد قائمة من .txt", desc: "تحليل ملف", icon: FileText },
-    { id: "list", label: "عرض جميع البروكسيهات", desc: "جدول كامل", icon: ListChecks },
-    { id: "validate", label: "التحقق من الصحة", desc: "فحص تلقائي", icon: ShieldCheck },
-    { id: "assign-manual", label: "تعيين يدوي لحساب", desc: "ربط بروكسي بحساب", icon: Link2 },
-    { id: "assign-auto", label: "تعيين تلقائي", desc: "نسبة مخصصة", icon: Zap },
-    { id: "remove-dead", label: "إزالة البروكسيهات الميتة", desc: "كشف وحذف", icon: Trash2 },
+    { id: "add",           label: "إضافة بروكسي جديد",         desc: "SOCKS5/4/HTTP/MTProto", icon: Plus        },
+    { id: "import",        label: "استيراد قائمة من .txt",      desc: "تحليل ملف",             icon: FileText    },
+    { id: "list",          label: "عرض جميع البروكسيهات",       desc: "جدول كامل",             icon: ListChecks  },
+    { id: "validate",      label: "التحقق من الصحة",            desc: "فحص تلقائي",            icon: ShieldCheck },
+    { id: "assign-manual", label: "تعيين يدوي لحساب",           desc: "ربط بروكسي بحساب",     icon: Link2       },
+    { id: "assign-auto",   label: "تعيين تلقائي",               desc: "نسبة مخصصة",            icon: Zap         },
+    { id: "remove-dead",   label: "إزالة البروكسيهات الميتة",   desc: "كشف وحذف",              icon: Trash2      },
   ];
   return (
     <div className="animate-fade">
@@ -22,14 +22,10 @@ export function ProxyModule() {
         {items.map((it) => {
           const Icon = it.icon;
           return (
-            <button key={it.id} onClick={() => push(["proxy", it.id])} className="card flex items-center gap-3 p-4 text-right hover:border-brand-500/40 hover:shadow-glow">
-              <div className="grid h-10 w-10 place-items-center rounded-lg bg-brand-500/10 text-brand-300 ring-1 ring-brand-500/30">
-                <Icon className="h-5 w-5" />
-              </div>
-              <div>
-                <div className="text-sm font-bold text-white">{it.label}</div>
-                <div className="text-xs text-slate-400">{it.desc}</div>
-              </div>
+            <button key={it.id} onClick={() => push(["proxy", it.id])}
+              className="card flex items-center gap-3 p-4 text-right transition hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-pop">
+              <div className="grid h-10 w-10 place-items-center rounded-lg bg-brand-50 text-brand-600 ring-1 ring-brand-200"><Icon className="h-5 w-5" /></div>
+              <div><div className="text-sm font-bold text-surface-800">{it.label}</div><div className="text-xs text-surface-500">{it.desc}</div></div>
             </button>
           );
         })}
@@ -40,22 +36,22 @@ export function ProxyModule() {
 
 export function ProxyScreen({ sub }: { sub: string }) {
   switch (sub) {
-    case "add": return <AddProxy />;
-    case "import": return <ImportProxy />;
-    case "list": return <ListProxy />;
-    case "validate": return <ValidateProxy />;
+    case "add":           return <AddProxy />;
+    case "import":        return <ImportProxy />;
+    case "list":          return <ListProxy />;
+    case "validate":      return <ValidateProxy />;
     case "assign-manual": return <AssignManual />;
-    case "assign-auto": return <AssignAuto />;
-    case "remove-dead": return <RemoveDead />;
-    default: return null;
+    case "assign-auto":   return <AssignAuto />;
+    case "remove-dead":   return <RemoveDead />;
+    default:              return null;
   }
 }
 
 function AddProxy() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [type, setType] = useState("SOCKS5");
-  const [addr, setAddr] = useState("");
+  const [type, setType]   = useState("SOCKS5");
+  const [addr, setAddr]   = useState("185.12.45.10:1080:user:pass");
   const [checking, setChecking] = useState(false);
   const [valid, setValid] = useState<boolean | null>(null);
   return (
@@ -64,14 +60,12 @@ function AddProxy() {
       <div className="mx-auto max-w-lg card p-6 space-y-4">
         <SectionTitle>النوع</SectionTitle>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {["SOCKS5", "SOCKS4", "HTTP/HTTPS", "MTProto"].map((t) => (
-            <OptionButton key={t} label={t} selected={type === t} onClick={() => setType(t)} />
-          ))}
+          {["SOCKS5","SOCKS4","HTTP/HTTPS","MTProto"].map((t) => <OptionButton key={t} label={t} selected={type === t} onClick={() => setType(t)} />)}
         </div>
-        <Field label="IP:PORT:USER:PASS" placeholder="185.12.45.10:1080:user:pass" value={addr} onChange={setAddr} />
+        <InlineEdit label="IP:PORT:USER:PASS" value={addr} onSave={setAddr} placeholder="185.12.45.10:1080:user:pass" />
         {checking && <Progress value={60} label="جاري التحقق..." sub="60%" tone="accent" />}
-        {valid === true && <Alert tone="success" title="بروكسي صالح" />}
-        {valid === false && <Alert tone="danger" title="بروكسي غير صالح" />}
+        {valid === true  && <Alert tone="success" title="بروكسي صالح" />}
+        {valid === false && <Alert tone="danger"  title="بروكسي غير صالح" />}
         <div className="flex gap-2">
           <Button variant="primary" className="flex-1" disabled={!addr || checking} onClick={() => { setChecking(true); setTimeout(() => { setChecking(false); setValid(true); }, 1200); }}>تحقق</Button>
           <Button disabled={valid !== true} onClick={() => { show("تم حفظ البروكسي"); push(["proxy"]); }}>حفظ</Button>
@@ -86,15 +80,15 @@ function AddProxy() {
 function ImportProxy() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [path, setPath] = useState("");
+  const [path, setPath]     = useState("/path/to/proxies.txt");
   const [parsing, setParsing] = useState(false);
-  const [done, setDone] = useState(false);
+  const [done, setDone]     = useState(false);
   return (
     <div className="animate-fade">
       <PageHeader title="استيراد قائمة من .txt" icon={<FileText className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
-        <Field label="مسار الملف" placeholder="/path/to/proxies.txt" value={path} onChange={setPath} />
-        {!parsing && !done && <Button variant="primary" className="w-full" disabled={!path} onClick={() => { setParsing(true); setTimeout(() => { setParsing(false); setDone(true); }, 1400); }}>بدء التحليل</Button>}
+        <InlineEdit label="مسار الملف" value={path} onSave={setPath} placeholder="/path/to/proxies.txt" />
+        {!parsing && !done && <Button variant="primary" className="w-full" onClick={() => { setParsing(true); setTimeout(() => { setParsing(false); setDone(true); }, 1400); }}>بدء التحليل</Button>}
         {parsing && <Progress value={70} label="جاري التحليل..." sub="70%" tone="accent" />}
         {done && (
           <div className="space-y-3">
@@ -116,7 +110,7 @@ function ListProxy() {
   return (
     <div className="animate-fade">
       <PageHeader title="عرض جميع البروكسيهات" icon={<ListChecks className="h-5 w-5" />} />
-      <Table columns={["#", "IP:PORT", "نوع", "حالة", "سرعة", "مرتبط بـ"]} rows={proxies.map((p, i) => [i + 1, p.addr, p.type, <StatusChip status={p.status as "active" | "dead" | "slow"} />, p.speed, p.linked])} />
+      <Table columns={["#","IP:PORT","نوع","حالة","سرعة","مرتبط بـ"]} rows={proxies.map((p,i) => [i+1, p.addr, p.type, <StatusChip status={p.status as "active"|"dead"|"slow"} />, p.speed, p.linked])} />
       <div className="mt-4"><Button onClick={() => push(["proxy"])}>رجوع</Button></div>
     </div>
   );
@@ -136,13 +130,13 @@ function ValidateProxy() {
         {done && (
           <div className="space-y-3">
             <div className="flex gap-3">
-              <span className="chip bg-brand-500/15 text-brand-300">نشط: 3</span>
-              <span className="chip bg-danger-500/15 text-danger-400">ميت: 1</span>
-              <span className="chip bg-warn-500/15 text-warn-400">بطيء: 1</span>
+              <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">نشط: 3</span>
+              <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">ميت: 1</span>
+              <span className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">بطيء: 1</span>
             </div>
-            <Table columns={["IP:PORT", "نوع", "سرعة", "حالة"]} rows={proxies.map((p) => [p.addr, p.type, p.speed, <StatusChip status={p.status as "active" | "dead" | "slow"} />])} />
+            <Table columns={["IP:PORT","نوع","سرعة","حالة"]} rows={proxies.map((p) => [p.addr, p.type, p.speed, <StatusChip status={p.status as "active"|"dead"|"slow"} />])} />
             <div className="flex gap-2">
-              <Button variant="danger" icon={<Trash2 className="h-4 w-4" />} onClick={() => push(["proxy", "remove-dead"])}>إزالة الميتة</Button>
+              <Button variant="danger" icon={<Trash2 className="h-4 w-4" />} onClick={() => push(["proxy","remove-dead"])}>إزالة الميتة</Button>
               <Button onClick={() => push(["proxy"])}>رجوع</Button>
             </div>
           </div>
@@ -155,7 +149,7 @@ function ValidateProxy() {
 function AssignManual() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [acc, setAcc] = useState<number | null>(null);
+  const [acc, setAcc]     = useState<number | null>(null);
   const [proxy, setProxy] = useState<number | null>(null);
   return (
     <div className="animate-fade">
@@ -164,7 +158,7 @@ function AssignManual() {
         <div className="card p-5">
           <SectionTitle>قائمة الحسابات</SectionTitle>
           <div className="space-y-2">
-            {[["1", "+966501234567"], ["2", "+966552345678"], ["3", "+966563456789"]].map(([id, label]) => (
+            {[["1","+966501234567"],["2","+966552345678"],["3","+966563456789"]].map(([id,label]) => (
               <OptionButton key={id} label={label} selected={acc === Number(id)} onClick={() => setAcc(Number(id))} />
             ))}
           </div>
@@ -200,10 +194,7 @@ function AssignAuto() {
         <Alert tone="info" title="متاح: 3 حساب بدون بروكسي | 3 بروكسي" />
         <SectionTitle>النسبة</SectionTitle>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <OptionButton label="1:1" selected={ratio === "1:1"} onClick={() => setRatio("1:1")} />
-          <OptionButton label="1:3" selected={ratio === "1:3"} onClick={() => setRatio("1:3")} />
-          <OptionButton label="1:5" selected={ratio === "1:5"} onClick={() => setRatio("1:5")} />
-          <OptionButton label="مخصص" selected={ratio === "custom"} onClick={() => setRatio("custom")} />
+          {["1:1","1:3","1:5","مخصص"].map((r) => <OptionButton key={r} label={r} selected={ratio === r} onClick={() => setRatio(r)} />)}
         </div>
         {!running && !done && <Button variant="primary" className="w-full" onClick={() => { setRunning(true); setTimeout(() => { setRunning(false); setDone(true); }, 1400); }}>بدء التعيين التلقائي</Button>}
         {running && <Progress value={80} label="جاري التعيين..." sub="80%" />}
