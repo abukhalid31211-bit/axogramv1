@@ -4,7 +4,7 @@ import {
   Trash2, Zap, Upload, Flame, Phone, KeyRound, CheckCircle2, Globe,
   LayersIcon, Heart, Settings2, UserCog, Image, Activity, Lock,
   Archive, AlertOctagon, BarChart2, Search, Filter, SortAsc,
-  Eye, EyeOff, FileKey, FolderZip, FileText, Star, ChevronDown,
+  Eye, EyeOff, FileKey, FileText, Star, ChevronDown,
 } from "lucide-react";
 import { useNav } from "../nav";
 import {
@@ -117,7 +117,7 @@ function AddAccount() {
         )}
         {step === 1 && (
           <div className="card p-6 space-y-4">
-            <Alert tone="info" title="⏳ جاري إرسال OTP...">سيصلك رمز عبر التطبيق أو رسالة SMS.</Alert>
+            <Alert tone="info" title="⏳ جاري إرسال OTP...">سي��لك رمز عبر التطبيق أو رسالة SMS.</Alert>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="primary" icon={<CheckCircle2 className="h-4 w-4" />} onClick={() => setStep(2)}>📱 استلمته في التطبيق</Button>
               <Button icon={<CheckCircle2 className="h-4 w-4" />} onClick={() => setStep(2)}>💬 استلمته SMS</Button>
