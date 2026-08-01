@@ -40,12 +40,20 @@ class GatherMergeJobPayload(BaseModel):
     run_inline: bool = False
 
 
+class GatherCleanJobPayload(BaseModel):
+    export_id: int
+    deduplicate: bool = True
+    keep_with_username: bool = False
+    keep_with_phone: bool = False
+    remove_bots: bool = True
+
+
 class GatherExtractResult(BaseModel):
     export_id: int
     file_name: str
     member_count: int
     source_label: str
-    execution_mode: str = "synthetic"
+    execution_mode: str = "telethon"
     warning: str | None = None
     generated_at: str
 
@@ -57,3 +65,23 @@ class GatherMergeResult(BaseModel):
     member_count: int
     deduplicated: bool
     generated_at: str
+
+
+class GatherTemplateBase(BaseModel):
+    name: str
+    source_label: str
+    source_type: str = "public"
+    extract_mode: str = "all"
+    limit: int = 1000
+    category: str | None = None
+
+
+class GatherTemplateCreate(GatherTemplateBase):
+    pass
+
+
+class GatherTemplatePublic(GatherTemplateBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: datetime

@@ -12,6 +12,8 @@ from app.api.routes import (
     reports,
     rotation,
     security,
+    groups,
+    notifications,
     settings,
     system,
     telegram,
@@ -27,6 +29,8 @@ api_router.include_router(accounts.router)
 api_router.include_router(add.router)
 api_router.include_router(proxies.router)
 api_router.include_router(settings.router)
+api_router.include_router(groups.router)
+api_router.include_router(notifications.router)
 api_router.include_router(reports.router)
 api_router.include_router(jobs.router)
 api_router.include_router(gather.router)

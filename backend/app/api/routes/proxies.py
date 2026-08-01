@@ -112,29 +112,19 @@ def validate_proxies(
     db: DbSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> dict:
-    query = db.query(Proxy)
-    if payload.proxy_ids:
-        query = query.filter(Proxy.id.in_(payload.proxy_ids))
-    rows = query.all()
-    results = []
-    for i, proxy in enumerate(rows):
-        ok = proxy.status != "dead" or i % 3 == 0
-        new_status = "active" if ok else "dead"
-        speed = 100 + (i * 37) if ok else None
-        proxy.status = new_status
-        if speed:
-            proxy.speed_ms = speed
-        db.add(proxy)
-        results.append({"id": proxy.id, "address": proxy.address, "status": new_status, "speed_ms": speed})
-    db.commit()
-    write_audit_log(db, action="proxies.validate", message=f"Validated {len(rows)} proxies", actor_user_id=current_user.id, entity_type="proxy", entity_id="batch")
-    return {
-        "active": sum(1 for r in results if r["status"] == "active"),
-        "dead": sum(1 for r in results if r["status"] == "dead"),
-        "slow": 0,
-        "rows": results,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
+    """Real proxy validation (TCP/SOCKS/HTTP CONNECT checks) run as a job."""
+    from app.schemas.jobs import JobStartResponse
+    from app.services import jobrunner
+
+    job_id = jobrunner.start_job(
+        kind="proxy_validate",
+        label="فحص البروكسيهات",
+        entity_type="proxy",
+        entity_id="validate",
+        actor_user_id=current_user.id,
+        payload={"proxy_ids": payload.proxy_ids, "actor_user_id": current_user.id},
+    )
+    return {"mode": "queued", "message": "بدأ الفحص الحقيقي للبروكسيهات — تابع التقدم من سجل المهام", "job_id": job_id, "results": [], "summary": {}}
 
 
 @router.get("/stats", response_model=dict)
@@ -179,17 +169,20 @@ def export_proxies(
 
 
 @router.post("/replace-dead", response_model=dict)
-def replace_dead(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
-    dead = db.query(Proxy).filter(Proxy.status == "dead").all()
-    replaced = 0
-    for proxy in dead:
-        proxy.status = "active"
-        proxy.speed_ms = 100 + (replaced * 25)
-        db.add(proxy)
-        replaced += 1
-    db.commit()
-    write_audit_log(db, action="proxies.replace_dead", message=f"Replaced {replaced} dead proxies", actor_user_id=current_user.id, entity_type="proxy", entity_id="batch")
-    return {"replaced": replaced, "remaining_without": 0}
+def replace_dead(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], payload: dict | None = None) -> dict:
+    """Replace dead proxies using real checks; optionally accept candidate lines."""
+    from app.services import jobrunner
+
+    candidates = (payload or {}).get("candidates") or []
+    job_id = jobrunner.start_job(
+        kind="proxy_replace_dead",
+        label="استبدال البروكسيهات الميتة",
+        entity_type="proxy",
+        entity_id="replace_dead",
+        actor_user_id=current_user.id,
+        payload={"candidates": candidates, "actor_user_id": current_user.id},
+    )
+    return {"mode": "queued", "message": "بدأ الاستبدال — تابع التقدم من سجل المهام", "job_id": job_id, "replaced": 0, "checked": 0, "remaining_without": 0}
 
 
 @router.put("/general", response_model=MessageResponse)

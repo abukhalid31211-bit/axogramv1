@@ -98,20 +98,25 @@ def update_rotation_settings(
 
 @router.get("/table", response_model=list[RotationTableRow])
 def rotation_table(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> list[RotationTableRow]:
+    from app.services.rotation import daily_limit_for, get_usage_snapshot
+
     accounts = db.query(Account).order_by(Account.id.asc()).all()
+    usage_map = {r["account_id"]: r for r in get_usage_snapshot(db)}
     rows = []
     for i, acc in enumerate(accounts):
-        status = "active" if i == 0 else ("paused" if acc.status == "restricted" else "active")
+        usage = usage_map.get(acc.id)
+        status = "active" if acc.status == "active" else acc.status
         next_phone = accounts[i + 1].phone if i + 1 < len(accounts) else (accounts[0].phone if accounts else None)
+        health = 100 if acc.status == "active" else (50 if acc.status == "restricted" else 0)
         rows.append(
             RotationTableRow(
                 position=i + 1,
                 account_id=acc.id,
                 phone=acc.phone,
-                health=max(35, min(96, 72 + min(acc.groups_count, 20))),
-                gather=120,
-                add=18,
-                dm=8,
+                health=health,
+                gather=usage["gather"] if usage else 0,
+                add=usage["add"] if usage else 0,
+                dm=usage["dm"] if usage else 0,
                 status=status,
                 next_phone=next_phone,
             )
@@ -121,26 +126,56 @@ def rotation_table(db: DbSession, current_user: Annotated[User, Depends(get_curr
 
 @router.get("/usage", response_model=list[RotationUsageRow])
 def rotation_usage(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> list[RotationUsageRow]:
+    from app.services.rotation import daily_limit_for, get_usage_snapshot
+
+    usage_map = {r["account_id"]: r for r in get_usage_snapshot(db)}
     accounts = db.query(Account).order_by(Account.id.asc()).all()
-    return [
-        RotationUsageRow(
-            account_id=acc.id,
-            phone=acc.phone,
-            gather=120,
-            add=18,
-            dm=8,
-            groups=acc.groups_count,
-            status=acc.status,
-            remaining=max(0, 500 - 120),
+    rows = []
+    for acc in accounts:
+        usage = usage_map.get(acc.id)
+        used = usage["total"] if usage else 0
+        limit = daily_limit_for(db, acc, "add")
+        rows.append(
+            RotationUsageRow(
+                account_id=acc.id,
+                phone=acc.phone,
+                gather=usage["gather"] if usage else 0,
+                add=usage["add"] if usage else 0,
+                dm=usage["dm"] if usage else 0,
+                groups=acc.groups_count,
+                status=acc.status,
+                remaining=max(0, limit - used),
+            )
         )
-        for acc in accounts
-    ]
+    return rows
+
+
+@router.get("/live")
+def rotation_live(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
+    """Live rotation monitor: active jobs + today's usage + active accounts."""
+    from app.services.rotation import get_usage_snapshot
+    from app.services import jobrunner as jr
+
+    runs = jr.get_active_runs()
+    return {
+        "active_jobs": [
+            {"id": r.id, "kind": r.kind, "label": r.label, "status": r.status, "progress": r.progress, "current_step": r.current_step, "created_at": r.created_at.isoformat()}
+            for r in runs
+        ],
+        "usage": get_usage_snapshot(db),
+        "active_accounts": db.query(Account).filter(Account.status == "active").count(),
+        "total_accounts": db.query(Account).count(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.post("/reset", response_model=MessageResponse)
 def reset_counters(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
-    write_audit_log(db, action="rotation.reset", message="Reset daily counters", actor_user_id=current_user.id, entity_type="rotation", entity_id="counters", level="warn")
-    return MessageResponse(message="تم تصفير العدادات اليومية")
+    from app.services.rotation import reset_usage
+
+    deleted = reset_usage(db)
+    write_audit_log(db, action="rotation.reset", message=f"تصفير العدادات اليومية ({deleted} سجل)", actor_user_id=current_user.id, entity_type="rotation", entity_id="counters", level="warn")
+    return MessageResponse(message=f"تم تصفير العدادات اليومية ({deleted} سجل)")
 
 
 @router.get("/profiles", response_model=list[RotationProfile])

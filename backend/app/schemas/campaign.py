@@ -13,7 +13,14 @@ class CampaignBase(BaseModel):
 
 
 class CampaignCreate(CampaignBase):
-    pass
+    message_text: str | None = None
+    message_kind: str = "text"
+    groups_json: str | None = None
+    recipients_json: str | None = None
+    settings_json: str | None = None
+    delete_after_hours: int | None = None
+    auto_leave_new_groups: bool = False
+    account_ids_json: str | None = None
 
 
 class CampaignUpdate(BaseModel):
@@ -23,12 +30,31 @@ class CampaignUpdate(BaseModel):
     progress: int | None = None
     total: int | None = None
     sent: int | None = None
+    message_text: str | None = None
+    message_kind: str | None = None
+    groups_json: str | None = None
+    recipients_json: str | None = None
+    settings_json: str | None = None
+    delete_after_hours: int | None = None
+    auto_leave_new_groups: bool | None = None
+    account_ids_json: str | None = None
 
 
 class CampaignPublic(CampaignBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    message_text: str | None = None
+    message_kind: str | None = None
+    groups_json: str | None = None
+    recipients_json: str | None = None
+    settings_json: str | None = None
+    delete_after_hours: int | None = None
+    auto_leave_new_groups: bool | None = None
+    account_ids_json: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    last_error: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -42,6 +68,34 @@ class CampaignStats(BaseModel):
     dm: int
     group: int
     total_sent: int
+
+
+class CampaignStartPayload(BaseModel):
+    scheduled_at: datetime | None = None
+
+
+class CampaignRetryPayload(BaseModel):
+    failed_items: list[str] = []
+
+
+class CampaignTestSendPayload(BaseModel):
+    target: str
+    account_id: int | None = None
+    message: str | None = None
+
+
+class CampaignReport(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    success: int
+    skipped: int
+    failed: int
+    total: int
+    failure_reasons: dict[str, int]
+    per_account: dict[str, dict]
+    failed_items: list
+    duration_minutes: float
+    generated_at: str
 
 
 class MessageTemplateBase(BaseModel):

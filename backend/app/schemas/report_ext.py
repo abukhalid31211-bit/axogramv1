@@ -1,6 +1,4 @@
-from datetime import datetime
-
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
 class AccountPerformance(BaseModel):
@@ -11,6 +9,7 @@ class AccountPerformance(BaseModel):
     dm: int
     success_rate: int
     flood_waits: int
+    operations: int = 0
 
 
 class LeaderboardRow(BaseModel):
@@ -27,6 +26,9 @@ class AdvancedAnalytics(BaseModel):
     avg_gather_speed: int
     avg_add_speed: int
     avg_dm_speed: int
+    total_operations: int = 0
+    flood_waits: int = 0
+    active_accounts: int = 0
 
 
 class LogManagementSummary(BaseModel):

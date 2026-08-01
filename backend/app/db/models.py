@@ -136,6 +136,23 @@ class Proxy(Base):
     pool: Mapped[ProxyPool | None] = relationship(back_populates="proxies")
 
 
+class AccountPool(Base):
+    __tablename__ = "account_pools"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    purpose: Mapped[str] = mapped_column(String(20), default=ProxyPurpose.multi.value)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    accounts: Mapped[list[Account]] = relationship(back_populates="pool")
+
+
 class Account(Base):
     __tablename__ = "accounts"
 
@@ -145,9 +162,11 @@ class Account(Base):
     username: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=AccountStatus.active.value)
     proxy_id: Mapped[int | None] = mapped_column(ForeignKey("proxies.id", ondelete="SET NULL"), nullable=True)
+    pool_id: Mapped[int | None] = mapped_column(ForeignKey("account_pools.id", ondelete="SET NULL"), nullable=True)
     groups_count: Mapped[int] = mapped_column(Integer, default=0)
     age_label: Mapped[str | None] = mapped_column(String(50), nullable=True)
     last_used_label: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     session_file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     telegram_user_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -159,6 +178,7 @@ class Account(Base):
     )
 
     proxy: Mapped[Proxy | None] = relationship(back_populates="accounts")
+    pool: Mapped[AccountPool | None] = relationship(back_populates="accounts")
 
 
 class TelegramAuthSession(Base):
@@ -178,6 +198,19 @@ class TelegramAuthSession(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+class GatherTemplate(Base):
+    __tablename__ = "gather_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)
+    source_label: Mapped[str] = mapped_column(String(255))
+    source_type: Mapped[str] = mapped_column(String(50), default="public")
+    extract_mode: Mapped[str] = mapped_column(String(50), default="all")
+    limit: Mapped[int] = mapped_column(Integer, default=1000)
+    category: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class GatherExport(Base):
@@ -223,6 +256,108 @@ class BlacklistEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class GroupCategory(Base):
+    __tablename__ = "group_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    groups: Mapped[list[TargetGroup]] = relationship(back_populates="category")
+
+
+class TargetGroup(Base):
+    __tablename__ = "target_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    group_type: Mapped[str] = mapped_column(String(20), default="public")
+    members_count: Mapped[int] = mapped_column(Integer, default=0)
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("group_categories.id", ondelete="SET NULL"), nullable=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    category: Mapped[GroupCategory | None] = relationship(back_populates="groups")
+
+
+class GroupBlacklist(Base):
+    __tablename__ = "group_blacklist"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_value: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class JobRun(Base):
+    __tablename__ = "job_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(50), index=True)
+    label: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    control: Mapped[str] = mapped_column(String(20), default="run")  # run | pause | cancel
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    current_step: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    progress_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entity_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    entity_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class RotationUsage(Base):
+    __tablename__ = "rotation_usage"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    usage_date: Mapped[str] = mapped_column(String(10), index=True)
+    gather_count: Mapped[int] = mapped_column(Integer, default=0)
+    add_count: Mapped[int] = mapped_column(Integer, default=0)
+    dm_count: Mapped[int] = mapped_column(Integer, default=0)
+    group_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_count: Mapped[int] = mapped_column(Integer, default=0)
+    flood_waits: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class NotificationEvent(Base):
+    __tablename__ = "notification_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    level: Mapped[str] = mapped_column(String(20), default="info")
+    title: Mapped[str] = mapped_column(String(255), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivery_status: Mapped[str] = mapped_column(String(20), default="pending")
+    delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AppSetting(Base):
     __tablename__ = "app_settings"
     __table_args__ = (UniqueConstraint("key", name="uq_setting_key"),)
@@ -265,6 +400,17 @@ class Campaign(Base):
     progress: Mapped[int] = mapped_column(Integer, default=0)
     total: Mapped[int] = mapped_column(Integer, default=0)
     sent: Mapped[int] = mapped_column(Integer, default=0)
+    message_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    message_kind: Mapped[str] = mapped_column(String(20), default=MessageKind.text.value)
+    groups_json: Mapped[str | None] = mapped_column(Text, nullable=True)       # list of group names/ids
+    recipients_json: Mapped[str | None] = mapped_column(Text, nullable=True)   # dm recipients (source info)
+    settings_json: Mapped[str | None] = mapped_column(Text, nullable=True)     # delays/limits/policies
+    delete_after_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    auto_leave_new_groups: Mapped[bool] = mapped_column(Boolean, default=False)
+    account_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # selected account ids
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -342,3 +488,20 @@ class SecurityEvent(Base):
     message: Mapped[str] = mapped_column(Text)
     details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ScheduledDeletion(Base):
+    __tablename__ = "scheduled_deletions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
+    chat_id: Mapped[str] = mapped_column(String(120))
+    message_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    delete_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )

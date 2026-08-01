@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class AccountValidationRow(BaseModel):
@@ -57,3 +57,25 @@ class JobStatusResponse(BaseModel):
     error: str | None = None
     enqueued_at: datetime | None = None
     ended_at: datetime | None = None
+
+
+class JobRunPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    kind: str
+    label: str
+    status: str
+    control: str
+    progress: int
+    current_step: str | None = None
+    progress_json: str | None = None
+    result_json: str | None = None
+    error: str | None = None
+    entity_type: str | None = None
+    entity_id: str | None = None
+    created_by: int | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    updated_at: datetime
