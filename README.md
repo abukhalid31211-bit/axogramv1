@@ -71,9 +71,9 @@ axogramv1/
 │   ├── lib/job.tsx           # نظام تتبع المهام (تقدم/إيقاف/استئناف)
 │   └── screens/              # 10 وحدات × ~110 شاشة فرعية
 ├── backend/
-│   ├── app/api/routes/       # 20 ملف routes (200+ endpoint)
+│   ├── app/api/routes/       # 20 ملف routes (~190 endpoint)
 │   ├── app/tasks/            # المحركات: gather/add/campaigns/accounts/groups/proxy/security/sessions
 │   ├── app/services/         # jobrunner, rotation, notify, security, telegram, scheduler, pdfexport
-│   └── app/db/models.py      # 21 جدول + ترحيل آمن للأعمدة الجديدة
+│   └── app/db/models.py      # 25 جدول + ترحيل آمن للأعمدة الجديدة
 ├── nginx/  Dockerfile.web  docker-compose.yml
 ```
