@@ -23,3 +23,19 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserPublic
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    full_name: str | None = None
+    role: str = "user"
+    is_active: bool = True
+
+
+class UserUpdate(BaseModel):
+    username: str | None = None
+    full_name: str | None = None
+    role: str | None = None
+    is_active: bool | None = None
+    password: str | None = None

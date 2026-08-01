@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 
 from app.core.crypto import encrypt_value
 from app.core.security import get_password_hash
-from app.db.models import Account, AppSetting, Campaign, Proxy, User
+from app.db.models import Account, AppSetting, Campaign, MessageTemplate, Proxy, User
 
 
 DEFAULT_SETTINGS = [
@@ -104,4 +104,14 @@ def ensure_initial_data(
     if db.query(Campaign).count() == 0:
         for item in DEFAULT_CAMPAIGNS:
             db.add(Campaign(**item))
+        db.commit()
+
+    if db.query(MessageTemplate).count() == 0:
+        for item in [
+            {"name": "قالب ترحيبي", "kind": "group", "message_kind": "text", "category": "ترحيب", "content": "أهلاً بك في قناتنا! اشترك للمزيد"},
+            {"name": "عرض المنتج", "kind": "dm", "message_kind": "image", "category": "تسويق", "content": "تفضل عرضنا الجديد 👇"},
+            {"name": "متابعة", "kind": "dm", "message_kind": "text", "category": "متابعة", "content": "هل تفضل الاستمرار؟"},
+            {"name": "إعلان", "kind": "group", "message_kind": "video", "category": "إعلان", "content": "شاهد الفيديو الجديد"},
+        ]:
+            db.add(MessageTemplate(**item))
         db.commit()

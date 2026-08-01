@@ -1,6 +1,23 @@
 from fastapi import APIRouter
 
-from app.api.routes import accounts, add, auth, gather, health, jobs, proxies, reports, settings, telegram, uploads, users
+from app.api.routes import (
+    accounts,
+    add,
+    auth,
+    campaigns,
+    gather,
+    health,
+    jobs,
+    proxies,
+    reports,
+    rotation,
+    security,
+    settings,
+    system,
+    telegram,
+    uploads,
+    users,
+)
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -15,3 +32,7 @@ api_router.include_router(jobs.router)
 api_router.include_router(gather.router)
 api_router.include_router(telegram.router)
 api_router.include_router(uploads.router)
+api_router.include_router(campaigns.router)
+api_router.include_router(rotation.router)
+api_router.include_router(security.router)
+api_router.include_router(system.router)

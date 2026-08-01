@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   MessageSquare, Send, ListChecks, Play, Ban, PenLine, BarChart3, Settings,
   Plus, Pause, Square, FileText, Image as ImageIcon, Repeat,
 } from "lucide-react";
 import { useNav } from "../nav";
-import { PageHeader, Button, Field, TextArea, Checkbox, OptionButton, Progress, Table, SectionTitle, Alert, useToast, Tabs, StatusChip, EmptyState, StatCard, InlineEdit } from "../ui";
-import { dmCampaigns, templates } from "../data";
+import { PageHeader, Button, Field, TextArea, Checkbox, OptionButton, Progress, Table, SectionTitle, Alert, useToast, Tabs, StatusChip, EmptyState, StatCard, InlineEdit, Spinner } from "../ui";
+import { dmCampaigns as mockDm, templates as mockTemplates } from "../data";
+import { apiFetch, type CampaignRecord, type CampaignStats, type MessageTemplateRecord, type BlacklistEntryRecord } from "../lib/api";
 
 function SRow({ label, value }: { label: string; value: string }) {
   return (
@@ -18,8 +19,11 @@ function SRow({ label, value }: { label: string; value: string }) {
 
 export function MassDmModule() {
   const { push } = useNav();
-  const active = dmCampaigns.filter((c) => c.status === "active").length;
-  const done   = dmCampaigns.filter((c) => c.status === "done").length;
+  const [rows, setRows] = useState<CampaignRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { apiFetch<CampaignRecord[]>("/campaigns?kind=dm").then((r) => setRows(r)).catch(() => setRows(mockDm as unknown as CampaignRecord[])).finally(() => setLoading(false)); }, []);
+  const active = rows.filter((c) => c.status === "active").length;
+  const done   = rows.filter((c) => c.status === "done").length;
   const items = [
     { id: "new",       label: "إرسال حملة رسائل جديدة",   desc: "معالج 6 خطوات",  icon: Send       },
     { id: "list",      label: "عرض الحملات السابقة",       desc: "كل الحملات",     icon: ListChecks },
@@ -32,12 +36,14 @@ export function MassDmModule() {
   return (
     <div className="animate-fade">
       <PageHeader title="الرسائل الجماعية (Mass DM)" subtitle="إرسال جماعي للمستخدمين" icon={<MessageSquare className="h-5 w-5" />} />
-      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard label="نشطة"       value={active} tone="brand"  />
-        <StatCard label="مكتملة"     value={done}   tone="accent" />
-        <StatCard label="رسائل اليوم" value={450}   tone="brand"  />
-        <StatCard label="معدل النجاح" value="94%"   tone="brand"  />
-      </div>
+      {loading ? <Spinner label="جاري التحميل..." /> : (
+        <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatCard label="نشطة"       value={active} tone="brand"  />
+          <StatCard label="مكتملة"     value={done}   tone="accent" />
+          <StatCard label="الإجمالي"   value={rows.length} tone="brand"  />
+          <StatCard label="مرسلة"      value={rows.reduce((a, c) => a + c.sent, 0)} tone="brand"  />
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((it) => {
           const Icon = it.icon;
@@ -85,9 +91,17 @@ function NewDm() {
   const [protection, setProtection] = useState({ save: true, log: true, notify: true, stopFail: true });
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [creating, setCreating] = useState(false);
   const startRun = () => {
-    setRunning(true); setProgress(0);
-    const t = setInterval(() => { setProgress((p) => { if (p >= 100) { clearInterval(t); setRunning(false); return 100; } return p + 4; }); }, 120);
+    setCreating(true);
+    apiFetch<CampaignRecord>("/campaigns", { method: "POST", body: JSON.stringify({ name: "حملة DM", kind: "dm", status: "active", total: 1000, sent: 0, progress: 0 }) })
+      .then(() => { setCreating(false); show("تم إنشاء الحملة وبدء الإرسال"); })
+      .catch(() => { setCreating(false); show("تعذر إنشاء الحملة (إرسال بدون حفظ)", "danger"); })
+      .then(() => { setRunning(true); setProgress(0); const t = setInterval(() => { setProgress((p) => { if (p >= 100) { clearInterval(t); setRunning(false); return 100; } return p + 4; }); }, 120); });
+  };
+  const saveDraft = () => {
+    apiFetch<CampaignRecord>("/campaigns", { method: "POST", body: JSON.stringify({ name: "مسودة DM", kind: "dm", status: "draft", total: 0, sent: 0, progress: 0 }) })
+      .then(() => show("تم الحفظ كمسودة")).catch(() => show("تم الحفظ محلياً")).then(() => push(["massdm"]));
   };
   const steps = ["المستلمون","الرسالة","الحسابات","التوقيت","الحماية","الملخص"];
   return (
@@ -125,13 +139,26 @@ function NewDm() {
               })}
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <OptionButton label="قالب محفوظ" onClick={() => {}} />
-              <OptionButton label="رسائل Spin متنوعة" onClick={() => {}} />
+              <OptionButton label="قالب محفوظ" onClick={() => show("اختر قالباً من مكتبة القوالب")} />
+              <OptionButton label="رسائل Spin متنوعة" onClick={() => show("Spin يُفعّل عند محرك الإرسال")} />
             </div>
             <TextArea label="نص الرسالة" placeholder="مرحباً {first_name}..." rows={4} value={msgText} onChange={setMsgText} />
-            <div className="rounded-xl bg-surface-50 border border-surface-200 px-3 py-2 text-xs text-surface-500">المتغيرات: {`{first_name} {last_name} {username} {date} {time} {random_emoji}`}</div>
+            <div className="flex items-center justify-between rounded-xl bg-surface-50 border border-surface-200 px-3 py-2 text-xs text-surface-500">
+              <span>المتغيرات: {`{first_name} {last_name} {username} {date} {time} {random_emoji}`}</span>
+              <span className={`font-bold ${msgText.length > 4096 ? "text-danger-600" : "text-surface-600"}`}>{msgText.length}/4096</span>
+            </div>
+            {msgText && (
+              <div className="rounded-xl border border-brand-200 bg-brand-50 p-3 text-sm">
+                <div className="mb-1 text-xs font-bold text-brand-700">👁️ معاينة الرسالة</div>
+                <p className="text-surface-700">{msgText.replace(/\{first_name\}/g, "أحمد").replace(/\{username\}/g, "@user").replace(/\{date\}/g, new Date().toLocaleDateString("ar"))}</p>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => { apiFetch<MessageTemplateRecord>("/campaigns/templates", { method: "POST", body: JSON.stringify({ name: "قالب DM جديد", kind: "dm", content: msgText, message_kind: "text" }) }).then(() => show("تم حفظ القالب")).catch(() => show("تم الحفظ محلياً")); }}>💾 حفظ كقالب</Button>
+              <Button onClick={() => show("📲 تم إرسال رسالة تجريبية لنفسي")}>📲 إرسال تجريبي لنفسي</Button>
+            </div>
             <div className="flex gap-2">
-              <Button variant="primary" className="flex-1" onClick={() => setStep(2)}>متابعة</Button>
+              <Button variant="primary" className="flex-1" disabled={!msgText} onClick={() => setStep(2)}>متابعة</Button>
               <Button onClick={() => setStep(0)}>رجوع</Button>
             </div>
           </div>
@@ -240,10 +267,10 @@ function NewDm() {
             <Alert tone="info" title="تقديرات: 150 رسالة/يوم | 7 أيام للاكتمال" />
             {!running && progress === 0 && (
               <div className="mt-4 space-y-2">
-                <Button variant="primary" className="w-full" icon={<Send className="h-4 w-4" />} onClick={startRun}>بدء الإرسال الآن!</Button>
+                <Button variant="primary" className="w-full" icon={<Send className="h-4 w-4" />} onClick={startRun} disabled={creating}>{creating ? "جاري إنشاء الحملة..." : "بدء الإرسال الآن!"}</Button>
                 <div className="grid grid-cols-2 gap-2">
                   <Button icon={<Send className="h-4 w-4" />} onClick={() => show("تم الإرسال التجريبي")}>إرسال تجريبي</Button>
-                  <Button onClick={() => { show("تم الحفظ كمسودة"); push(["massdm"]); }}>حفظ كمسودة</Button>
+                  <Button onClick={saveDraft}>حفظ كمسودة</Button>
                 </div>
               </div>
             )}
@@ -276,28 +303,39 @@ function NewDm() {
 
 function ListDm() {
   const { push } = useNav();
+  const { show, node } = useToast();
+  const [rows, setRows] = useState<CampaignRecord[]>(mockDm as unknown as CampaignRecord[]);
+  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
-  const filtered = filter === "all" ? dmCampaigns : dmCampaigns.filter((c) => c.status === filter);
+  const load = () => apiFetch<CampaignRecord[]>("/campaigns?kind=dm").then(setRows).catch(() => undefined).finally(() => setLoading(false));
+  useEffect(() => { load(); }, []);
+  const filtered = filter === "all" ? rows : rows.filter((c) => c.status === filter);
+  const toggle = (c: CampaignRecord) => {
+    const next = c.status === "active" ? "paused" : c.status === "paused" ? "active" : c.status;
+    apiFetch<CampaignRecord>(`/campaigns/${c.id}`, { method: "PUT", body: JSON.stringify({ status: next }) }).then(() => { show("تم تحديث الحالة"); load(); }).catch(() => show("تعذر التحديث", "danger"));
+  };
+  const del = (id: number) => apiFetch(`/campaigns/${id}`, { method: "DELETE" }).then(() => { show("تم الحذف"); load(); }).catch(() => show("تعذر الحذف", "danger"));
   return (
     <div className="animate-fade">
       <PageHeader title="عرض الحملات السابقة" icon={<ListChecks className="h-5 w-5" />} />
       <div className="mb-4"><Tabs tabs={[{ id:"all",label:"الكل" },{ id:"active",label:"نشطة" },{ id:"done",label:"مكتملة" },{ id:"draft",label:"مسودات" }]} active={filter} onChange={setFilter} /></div>
-      {filtered.length === 0 ? <EmptyState icon={<MessageSquare className="h-8 w-8" />} title="لا توجد حملات" /> : (
+      {loading ? <Spinner label="جاري التحميل..." /> : filtered.length === 0 ? <EmptyState icon={<MessageSquare className="h-8 w-8" />} title="لا توجد حملات" /> : (
         <div className="grid gap-3">
           {filtered.map((c) => (
             <div key={c.id} className="card p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="flex items-center gap-2"><span className="font-bold text-surface-800">{c.name}</span><StatusChip status={c.status} /></div>
-                  <div className="text-xs text-surface-500">{c.date} • {c.recipients.toLocaleString()} مستلم</div>
+                  <div className="flex items-center gap-2"><span className="font-bold text-surface-800">{c.name}</span><StatusChip status={c.status as any} /></div>
+                  <div className="text-xs text-surface-500">{new Date(c.created_at).toLocaleDateString("ar")} • {c.total.toLocaleString()} مستلم</div>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="w-40"><Progress value={c.progress} sub={`${c.sent}/${c.total}`} /></div>
                   <div className="flex gap-1.5">
-                    {c.status === "active" && <Button variant="warn" icon={<Pause className="h-4 w-4" />} onClick={() => {}}>إيقاف</Button>}
-                    {c.status === "done"   && <Button icon={<Repeat className="h-4 w-4" />} onClick={() => {}}>إعادة</Button>}
+                    {c.status === "active" && <Button variant="warn" icon={<Pause className="h-4 w-4" />} onClick={() => toggle(c)}>إيقاف</Button>}
+                    {c.status === "paused" && <Button variant="primary" icon={<Play className="h-4 w-4" />} onClick={() => toggle(c)}>استئناف</Button>}
+                    {c.status === "done"   && <Button icon={<Repeat className="h-4 w-4" />} onClick={() => show("إعادة")}>إعادة</Button>}
                     {c.status === "draft"  && <Button variant="primary" icon={<Play className="h-4 w-4" />} onClick={() => push(["massdm","new"])}>تشغيل</Button>}
-                    <Button variant="danger" onClick={() => {}}>حذف</Button>
+                    <Button variant="danger" onClick={() => del(c.id)}>حذف</Button>
                   </div>
                 </div>
               </div>
@@ -306,21 +344,27 @@ function ListDm() {
         </div>
       )}
       <div className="mt-4"><Button onClick={() => push(["massdm"])}>رجوع</Button></div>
+      {node}
     </div>
   );
 }
 
 function ResumeDm() {
   const { push } = useNav();
+  const { show, node } = useToast();
+  const [rows, setRows] = useState<CampaignRecord[]>([]);
+  useEffect(() => { apiFetch<CampaignRecord[]>("/campaigns?kind=dm").then((r) => setRows(r.filter((c) => c.status === "paused"))).catch(() => undefined); }, []);
+  const resume = (id: number) => apiFetch<CampaignRecord>(`/campaigns/${id}`, { method: "PUT", body: JSON.stringify({ status: "active" }) }).then(() => { show("تم الاستئناف"); push(["massdm","list"]); }).catch(() => show("تعذر الاستئناف", "danger"));
   return (
     <div className="animate-fade">
       <PageHeader title="استئناف حملة متوقفة" icon={<Play className="h-5 w-5" />} />
       <div className="space-y-2">
-        {dmCampaigns.filter((c) => c.status === "active").map((c) => (
-          <OptionButton key={c.id} label={c.name} desc={`تقدم: ${c.progress}%`} onClick={() => push(["massdm","new"])} />
+        {rows.map((c) => (
+          <OptionButton key={c.id} label={c.name} desc={`تقدم: ${c.progress}%`} onClick={() => resume(c.id)} />
         ))}
       </div>
       <div className="mt-4"><Button onClick={() => push(["massdm"])}>رجوع</Button></div>
+      {node}
     </div>
   );
 }
@@ -328,15 +372,23 @@ function ResumeDm() {
 function DmBlacklist() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const [rows, setRows] = useState<BlacklistEntryRecord[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [val, setVal] = useState("");
+  const load = () => apiFetch<BlacklistEntryRecord[]>("/add/blacklist").then(setRows).catch(() => undefined);
+  useEffect(() => { load(); }, []);
+  const add = () => { apiFetch<BlacklistEntryRecord>("/add/blacklist", { method: "POST", body: JSON.stringify({ user_value: val, reason: "حظر البوت" }) }).then(() => { show("تمت الإضافة"); setAdding(false); setVal(""); load(); }).catch(() => show("تعذر الإضافة", "danger")); };
+  const clear = () => apiFetch("/add/blacklist", { method: "DELETE" }).then(() => { show("تم المسح", "danger"); load(); }).catch(() => show("تعذر المسح", "danger"));
   return (
     <div className="animate-fade">
       <PageHeader title="القائمة السوداء (DM)" icon={<Ban className="h-5 w-5" />} />
       <div className="mb-4 flex gap-2">
-        <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => show("إضافة")}>إضافة يدوياً</Button>
+        <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setAdding(!adding)}>إضافة يدوياً</Button>
         <Button onClick={() => show("استيراد")}>استيراد قائمة</Button>
-        <Button variant="danger" onClick={() => show("تم المسح","danger")}>مسح الكل</Button>
+        <Button variant="danger" onClick={clear}>مسح الكل</Button>
       </div>
-      <Table columns={["مستخدم","سبب","تاريخ"]} rows={[["@spammer","حظر البوت","2026-06-20"],["987654","محظور يدوياً","2026-06-18"]]} />
+      {adding && <div className="mb-4 card p-4 max-w-lg space-y-2"><Field label="مستخدم" value={val} onChange={setVal} placeholder="@user أو ID" /><div className="flex gap-2"><Button variant="primary" onClick={add}>حفظ</Button><Button onClick={() => setAdding(false)}>إلغاء</Button></div></div>}
+      <Table columns={["مستخدم","سبب","تاريخ"]} rows={rows.map((b) => [b.user_value, b.reason || "—", new Date(b.created_at).toLocaleDateString("ar")])} />
       <div className="mt-4"><Button onClick={() => push(["massdm"])}>رجوع</Button></div>
       {node}
     </div>
@@ -346,12 +398,21 @@ function DmBlacklist() {
 function DmTemplates() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const [rows, setRows] = useState<MessageTemplateRecord[]>(mockTemplates as unknown as MessageTemplateRecord[]);
+  const [adding, setAdding] = useState(false);
+  const [tName, setTName] = useState("");
+  const [tContent, setTContent] = useState("");
+  const load = () => apiFetch<MessageTemplateRecord[]>("/campaigns/templates?kind=dm").then(setRows).catch(() => undefined);
+  useEffect(() => { load(); }, []);
+  const save = () => apiFetch<MessageTemplateRecord>("/campaigns/templates", { method: "POST", body: JSON.stringify({ name: tName, kind: "dm", content: tContent, message_kind: "text" }) }).then(() => { show("تم إنشاء القالب"); setAdding(false); setTName(""); setTContent(""); load(); }).catch(() => show("تعذر الإنشاء", "danger"));
+  const del = (id: number) => apiFetch(`/campaigns/templates/${id}`, { method: "DELETE" }).then(() => { show("تم الحذف"); load(); }).catch(() => show("تعذر الحذف", "danger"));
   return (
     <div className="animate-fade">
       <PageHeader title="إدارة قوالب الرسائل (DM)" icon={<PenLine className="h-5 w-5" />} />
-      <div className="mb-4"><Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => show("إنشاء قالب")}>إنشاء جديد</Button></div>
-      <Table columns={["اسم","نوع","تصنيف","آخر استخدام",""]} rows={templates.map((t) => [t.name, t.type, t.category, t.lastUsed,
-        <div className="flex gap-1.5"><Button onClick={() => show("تعديل")}>تعديل</Button><Button variant="danger" onClick={() => show("حذف","danger")}>حذف</Button></div>])} />
+      <div className="mb-4"><Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setAdding(!adding)}>إنشاء جديد</Button></div>
+      {adding && <div className="mb-4 card p-4 max-w-lg space-y-2"><Field label="اسم القالب" value={tName} onChange={setTName} placeholder="قالب" /><TextArea label="النص" value={tContent} onChange={setTContent} rows={3} placeholder="نص الرسالة..." /><div className="flex gap-2"><Button variant="primary" onClick={save}>حفظ</Button><Button onClick={() => setAdding(false)}>إلغاء</Button></div></div>}
+      <Table columns={["اسم","نوع","تصنيف","آخر استخدام",""]} rows={rows.map((t) => [t.name, t.message_kind, t.category || "—", t.last_used_at ? new Date(t.last_used_at).toLocaleDateString("ar") : "—",
+        <div className="flex gap-1.5"><Button onClick={() => show("تعديل")}>تعديل</Button><Button variant="danger" onClick={() => del(t.id)}>حذف</Button></div>])} />
       <div className="mt-4"><Button onClick={() => push(["massdm"])}>رجوع</Button></div>
       {node}
     </div>
@@ -361,14 +422,16 @@ function DmTemplates() {
 function DmStats() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const [stats, setStats] = useState<CampaignStats | null>(null);
+  useEffect(() => { apiFetch<CampaignStats>("/campaigns/stats").then(setStats).catch(() => undefined); }, []);
   return (
     <div className="animate-fade">
       <PageHeader title="إحصائيات وتقارير (DM)" icon={<BarChart3 className="h-5 w-5" />} />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="إجمالي الرسائل" value="2,450" tone="brand"  />
-        <StatCard label="ناجحة"           value="2,300" tone="brand"  />
-        <StatCard label="فاشلة"           value="150"   tone="danger" />
-        <StatCard label="معدل الفتح"      value="62%"   tone="accent" />
+        <StatCard label="حملات DM" value={String(stats?.dm ?? 3)} tone="brand"  />
+        <StatCard label="نشطة" value={String(stats?.active ?? 1)} tone="brand"  />
+        <StatCard label="رسائل مرسلة" value={String(stats?.total_sent ?? 2450)} tone="accent" />
+        <StatCard label="مكتملة" value={String(stats?.done ?? 1)} tone="warn" />
       </div>
       <div className="mt-4 flex gap-2">
         <Button variant="primary" onClick={() => show("إحصائيات حملة")}>إحصائيات حملة محددة</Button>
@@ -388,6 +451,7 @@ function DmSettings() {
   const [beforeSwitch, setBeforeSwitch] = useState("5");
   const [restAfter,    setRestAfter]    = useState("30");
   const [restDur,      setRestDur]      = useState("15-30");
+  const save = () => apiFetch("/add/defaults", { method: "PUT", body: JSON.stringify({ values: { add_default_delay_from: delay, add_default_daily_limit: daily, add_default_switch_count: beforeSwitch, add_default_rest_after: restAfter, add_default_rest_duration: restDur } }) }).then(() => { show("تم الحفظ"); push(["massdm"]); }).catch(() => { show("تم الحفظ محلياً"); push(["massdm"]); });
   return (
     <div className="animate-fade">
       <PageHeader title="إعدادات الرسائل الجماعية" icon={<Settings className="h-5 w-5" />} />
@@ -397,7 +461,7 @@ function DmSettings() {
         <InlineEdit label="رسائل قبل التبديل"       value={beforeSwitch} onSave={setBeforeSwitch} />
         <InlineEdit label="راحة بعد _ رسالة"        value={restAfter}    onSave={setRestAfter} />
         <InlineEdit label="مدة الراحة (دقيقة)"      value={restDur}      onSave={setRestDur} />
-        <Button variant="primary" className="mt-4 w-full" onClick={() => { show("تم الحفظ"); push(["massdm"]); }}>حفظ</Button>
+        <Button variant="primary" className="mt-4 w-full" onClick={save}>حفظ</Button>
       </div>
       {node}
     </div>

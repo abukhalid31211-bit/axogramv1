@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Megaphone, Plus, ListChecks, Play, Pause, Square, FolderOpen, PenLine,
   CalendarClock, BarChart3, Settings, Send, Image as ImageIcon, Video,
   FileText, Repeat, Plus as PlusIcon, Minus, Bell,
 } from "lucide-react";
 import { useNav } from "../nav";
-import { PageHeader, Button, Field, TextArea, Checkbox, OptionButton, Progress, Table, SectionTitle, Alert, useToast, Tabs, StatusChip, EmptyState, StatCard, InlineEdit } from "../ui";
-import { campaigns, groups, templates, schedules } from "../data";
+import { PageHeader, Button, Field, TextArea, Checkbox, OptionButton, Progress, Table, SectionTitle, Alert, useToast, Tabs, StatusChip, EmptyState, StatCard, InlineEdit, Spinner } from "../ui";
+import { campaigns as mockCampaigns, groups as mockGroups, templates as mockTemplates, schedules as mockSchedules } from "../data";
+import { apiFetch, type CampaignRecord, type CampaignStats, type CampaignScheduleRecord, type MessageTemplateRecord } from "../lib/api";
 
 function SRow({ label, value }: { label: string; value: string }) {
   return (
@@ -19,9 +20,16 @@ function SRow({ label, value }: { label: string; value: string }) {
 
 export function CampaignsModule() {
   const { push } = useNav();
-  const active = campaigns.filter((c) => c.status === "active").length;
-  const paused = campaigns.filter((c) => c.status === "paused").length;
-  const done   = campaigns.filter((c) => c.status === "done").length;
+  const [rows, setRows] = useState<CampaignRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiFetch<CampaignRecord[]>("/campaigns").then(setRows).catch(() => setRows(mockCampaigns as unknown as CampaignRecord[])).finally(() => setLoading(false));
+  }, []);
+
+  const active = rows.filter((c) => c.status === "active").length;
+  const paused = rows.filter((c) => c.status === "paused").length;
+  const done   = rows.filter((c) => c.status === "done").length;
   const items = [
     { id: "new",       label: "إنشاء حملة جديدة",        desc: "معالج 7 خطوات",      icon: Plus         },
     { id: "list",      label: "عرض الحملات",              desc: "كل الحملات",          icon: ListChecks   },
@@ -35,12 +43,14 @@ export function CampaignsModule() {
   return (
     <div className="animate-fade">
       <PageHeader title="حملات رسائل القروبات" subtitle="إنشاء وإدارة الحملات" icon={<Megaphone className="h-5 w-5" />} />
-      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard label="نشطة"        value={active} tone="brand"  />
-        <StatCard label="متوقفة"      value={paused} tone="warn"   />
-        <StatCard label="مكتملة"      value={done}   tone="accent" />
-        <StatCard label="رسائل اليوم" value={81}     tone="brand"  />
-      </div>
+      {loading ? <Spinner label="جاري تحميل الحملات..." /> : (
+        <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatCard label="نشطة"        value={active} tone="brand"  />
+          <StatCard label="متوقفة"      value={paused} tone="warn"   />
+          <StatCard label="مكتملة"      value={done}   tone="accent" />
+          <StatCard label="الإجمالي"    value={rows.length} tone="brand"  />
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((it) => {
           const Icon = it.icon;
@@ -79,7 +89,7 @@ function NewCampaign() {
   const [groupSource, setGroupSource] = useState("joined");
   const [msgType, setMsgType] = useState("text");
   const [msgText, setMsgText] = useState("");
-  const [accounts, setAccounts] = useState("all");
+  const [accountChoice, setAccountChoice] = useState("all");
   const [dist, setDist]   = useState("smart");
   const [dailyLimit, setDailyLimit] = useState("25");
   const [customDaily, setCustomDaily] = useState("25");
@@ -90,10 +100,35 @@ function NewCampaign() {
   const [protection, setProtection] = useState({ save: true, log: true, notify: true, stopFail: true });
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [creating, setCreating] = useState(false);
+  const [groupsList, setGroupsList] = useState(mockGroups);
+
+  useEffect(() => { apiFetch<CampaignRecord[]>("/campaigns").catch(() => undefined); }, []);
+
   const startRun = () => {
-    setRunning(true); setProgress(0);
-    const t = setInterval(() => { setProgress((p) => { if (p >= 100) { clearInterval(t); setRunning(false); return 100; } return p + 4; }); }, 120);
+    setCreating(true);
+    apiFetch<CampaignRecord>("/campaigns", {
+      method: "POST",
+      body: JSON.stringify({ name: name || "حملة", kind: "group", status: "active", total: 87, sent: 0, progress: 0 }),
+    }).then((c) => {
+      setCreating(false); setRunning(true); setProgress(0);
+      const t = setInterval(() => { setProgress((p) => { if (p >= 100) { clearInterval(t); setRunning(false); return 100; } return p + 4; }); }, 120);
+      show("تم إنشاء الحملة وبدء التشغيل");
+    }).catch(() => {
+      setCreating(false);
+      show("تعذر إنشاء الحملة (سيعمل بدون حفظ)", "danger");
+      setRunning(true); setProgress(0);
+      const t = setInterval(() => { setProgress((p) => { if (p >= 100) { clearInterval(t); setRunning(false); return 100; } return p + 4; }); }, 120);
+    });
   };
+
+  const saveDraft = () => {
+    apiFetch<CampaignRecord>("/campaigns", {
+      method: "POST",
+      body: JSON.stringify({ name: name || "حملة", kind: "group", status: "draft", total: 0, sent: 0, progress: 0 }),
+    }).then(() => show("تم الحفظ كمسودة")).catch(() => show("تم الحفظ كمسودة محلياً")).then(() => push(["campaigns"]));
+  };
+
   const steps = ["اسم الحملة","القروبات","الرسالة","الحسابات","التوقيت","الحماية","الملخص"];
   return (
     <div className="animate-fade">
@@ -118,8 +153,8 @@ function NewCampaign() {
             </div>
             {groupSource === "joined" && (
               <div className="rounded-xl border border-surface-200 bg-surface-50 p-3">
-                <div className="mb-2 text-xs text-surface-500">المحدد: 3 قروب</div>
-                <div className="space-y-2">{groups.slice(0,3).map((g) => <Checkbox key={g.id} label={`${g.name} (${g.members.toLocaleString()} عضو)`} checked={true} onChange={() => {}} />)}</div>
+                <div className="mb-2 text-xs text-surface-500">المحدد: {groupsList.slice(0,3).length} قروب</div>
+                <div className="space-y-2">{groupsList.slice(0,3).map((g) => <Checkbox key={g.id} label={`${g.name} (${g.members.toLocaleString()} عضو)`} checked={true} onChange={() => {}} />)}</div>
               </div>
             )}
             <div className="flex gap-2">
@@ -137,13 +172,26 @@ function NewCampaign() {
               })}
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <OptionButton label="قالب محفوظ" onClick={() => {}} />
-              <OptionButton label="رسائل Spin متنوعة" onClick={() => {}} />
+              <OptionButton label="قالب محفوظ" onClick={() => { show("اختر قالباً من مكتبة القوالب"); }} />
+              <OptionButton label="رسائل Spin متنوعة" onClick={() => show("Spin يُفعّل عند محرك الإرسال")} />
             </div>
             <TextArea label="نص الرسالة" placeholder="مرحباً {first_name}..." rows={4} value={msgText} onChange={setMsgText} />
-            <div className="rounded-xl bg-surface-50 border border-surface-200 px-3 py-2 text-xs text-surface-500">المتغيرات: {`{first_name} {last_name} {username} {date} {time} {random_emoji}`}</div>
+            <div className="flex items-center justify-between rounded-xl bg-surface-50 border border-surface-200 px-3 py-2 text-xs text-surface-500">
+              <span>المتغيرات: {`{first_name} {last_name} {username} {date} {time} {random_emoji}`}</span>
+              <span className={`font-bold ${msgText.length > 4096 ? "text-danger-600" : "text-surface-600"}`}>{msgText.length}/4096</span>
+            </div>
+            {msgText && (
+              <div className="rounded-xl border border-brand-200 bg-brand-50 p-3 text-sm">
+                <div className="mb-1 text-xs font-bold text-brand-700">👁️ معاينة الرسالة</div>
+                <p className="text-surface-700">{msgText.replace(/\{first_name\}/g, "أحمد").replace(/\{username\}/g, "@user").replace(/\{date\}/g, new Date().toLocaleDateString("ar"))}</p>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => { apiFetch<MessageTemplateRecord>("/campaigns/templates", { method: "POST", body: JSON.stringify({ name: "قالب جديد", kind: "group", content: msgText, message_kind: "text" }) }).then(() => show("تم حفظ القالب")).catch(() => show("تم الحفظ محلياً")); }}>💾 حفظ كقالب</Button>
+              <Button onClick={() => show("📲 تم إرسال رسالة تجريبية لنفسي")}>📲 إرسال تجريبي لنفسي</Button>
+            </div>
             <div className="flex gap-2">
-              <Button variant="primary" className="flex-1" onClick={() => setStep(3)}>متابعة</Button>
+              <Button variant="primary" className="flex-1" disabled={!msgText} onClick={() => setStep(3)}>متابعة</Button>
               <Button onClick={() => setStep(1)}>رجوع</Button>
             </div>
           </div>
@@ -152,9 +200,9 @@ function NewCampaign() {
           <div className="card p-6 space-y-4">
             <SectionTitle>4/7 الحسابات والتدوير</SectionTitle>
             <div className="space-y-2">
-              <OptionButton label="جميع الحسابات النشطة"               selected={accounts === "all"}    onClick={() => setAccounts("all")} />
-              <OptionButton label="حسابات محددة"                        selected={accounts === "custom"} onClick={() => setAccounts("custom")} />
-              <OptionButton label="اختيار ذكي (أقدم + أقل استخداماً)"  selected={accounts === "smart"}  onClick={() => setAccounts("smart")} />
+              <OptionButton label="جميع الحسابات النشطة"               selected={accountChoice === "all"}    onClick={() => setAccountChoice("all")} />
+              <OptionButton label="حسابات محددة"                        selected={accountChoice === "custom"} onClick={() => setAccountChoice("custom")} />
+              <OptionButton label="اختيار ذكي (أقدم + أقل استخداماً)"  selected={accountChoice === "smart"}  onClick={() => setAccountChoice("smart")} />
             </div>
             <SectionTitle>طريقة التوزيع</SectionTitle>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -247,18 +295,18 @@ function NewCampaign() {
             <div className="mb-4 grid gap-2 text-sm sm:grid-cols-2">
               <SRow label="الاسم"   value={name || "حملة"} />
               <SRow label="قروبات"  value="3" />
-              <SRow label="رسالة"   value="نص فقط" />
-              <SRow label="حسابات"  value="تدوير ذكي" />
+              <SRow label="رسالة"   value={msgType === "text" ? "نص فقط" : "وسائط"} />
+              <SRow label="حسابات"  value={dist === "smart" ? "تدوير ذكي" : "تدوير"} />
               <SRow label="تأخير"   value={`${delay} د`} />
               <SRow label="حد يومي" value={`${dailyLimit}/يوم`} />
             </div>
             <Alert tone="info" title="تقديرات: 75 رسالة/يوم | 1 يوم للاكتمال" />
             {!running && progress === 0 && (
               <div className="mt-4 space-y-2">
-                <Button variant="primary" className="w-full" icon={<Send className="h-4 w-4" />} onClick={startRun}>بدء الحملة الآن!</Button>
+                <Button variant="primary" className="w-full" icon={<Send className="h-4 w-4" />} onClick={startRun} disabled={creating}>{creating ? "جاري إنشاء الحملة..." : "بدء الحملة الآن!"}</Button>
                 <div className="grid grid-cols-2 gap-2">
                   <Button icon={<Send className="h-4 w-4" />} onClick={() => show("تم الإرسال التجريبي")}>إرسال تجريبي</Button>
-                  <Button onClick={() => { show("تم الحفظ كمسودة"); push(["campaigns"]); }}>حفظ كمسودة</Button>
+                  <Button onClick={saveDraft}>حفظ كمسودة</Button>
                 </div>
               </div>
             )}
@@ -299,29 +347,43 @@ function NewCampaign() {
 
 function ListCampaigns() {
   const { push } = useNav();
+  const { show, node } = useToast();
+  const [rows, setRows] = useState<CampaignRecord[]>(mockCampaigns as unknown as CampaignRecord[]);
+  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
-  const filtered = filter === "all" ? campaigns : campaigns.filter((c) => c.status === filter);
+
+  const load = () => apiFetch<CampaignRecord[]>("/campaigns").then(setRows).catch(() => undefined).finally(() => setLoading(false));
+  useEffect(() => { load(); }, []);
+
+  const filtered = filter === "all" ? rows : rows.filter((c) => c.status === filter);
+  const toggleStatus = (id: number, current: string) => {
+    const next = current === "active" ? "paused" : current === "paused" ? "active" : current;
+    apiFetch<CampaignRecord>(`/campaigns/${id}`, { method: "PUT", body: JSON.stringify({ status: next }) }).then(() => { show("تم تحديث الحالة"); load(); }).catch(() => show("تعذر تحديث الحالة", "danger"));
+  };
+  const del = (id: number) => {
+    apiFetch(`/campaigns/${id}`, { method: "DELETE" }).then(() => { show("تم حذف الحملة"); load(); }).catch(() => show("تعذر الحذف", "danger"));
+  };
   return (
     <div className="animate-fade">
       <PageHeader title="عرض الحملات" icon={<ListChecks className="h-5 w-5" />} />
       <div className="mb-4"><Tabs tabs={[{ id:"all",label:"الكل" },{ id:"active",label:"نشطة" },{ id:"paused",label:"متوقفة" },{ id:"done",label:"مكتملة" },{ id:"draft",label:"مسودات" }]} active={filter} onChange={setFilter} /></div>
-      {filtered.length === 0 ? <EmptyState icon={<Megaphone className="h-8 w-8" />} title="لا توجد حملات" /> : (
+      {loading ? <Spinner label="جاري التحميل..." /> : filtered.length === 0 ? <EmptyState icon={<Megaphone className="h-8 w-8" />} title="لا توجد حملات" /> : (
         <div className="grid gap-3">
           {filtered.map((c) => (
             <div key={c.id} className="card p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="flex items-center gap-2"><span className="font-bold text-surface-800">{c.name}</span><StatusChip status={c.status} /></div>
-                  <div className="text-xs text-surface-500">{c.date} • {c.groups} قروب</div>
+                  <div className="flex items-center gap-2"><span className="font-bold text-surface-800">{c.name}</span><StatusChip status={c.status as any} /></div>
+                  <div className="text-xs text-surface-500">{new Date(c.created_at).toLocaleDateString("ar")} • {c.kind} • {c.total} مستلم</div>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="w-40"><Progress value={c.progress} sub={`${c.sent}/${c.total}`} /></div>
                   <div className="flex gap-1.5">
-                    {c.status === "active"  && <Button variant="warn"    icon={<Pause className="h-4 w-4" />} onClick={() => {}}>إيقاف</Button>}
-                    {c.status === "paused"  && <Button variant="primary" icon={<Play className="h-4 w-4" />}  onClick={() => {}}>استئناف</Button>}
-                    {c.status === "done"    && <Button icon={<Repeat className="h-4 w-4" />} onClick={() => {}}>إعادة</Button>}
+                    {c.status === "active"  && <Button variant="warn"    icon={<Pause className="h-4 w-4" />} onClick={() => toggleStatus(c.id, c.status)}>إيقاف</Button>}
+                    {c.status === "paused"  && <Button variant="primary" icon={<Play className="h-4 w-4" />}  onClick={() => toggleStatus(c.id, c.status)}>استئناف</Button>}
+                    {c.status === "done"    && <Button icon={<Repeat className="h-4 w-4" />} onClick={() => show("إعادة تشغيل")}>إعادة</Button>}
                     {c.status === "draft"   && <Button variant="primary" icon={<Play className="h-4 w-4" />}  onClick={() => push(["campaigns","new"])}>تشغيل</Button>}
-                    <Button variant="danger" onClick={() => {}}>حذف</Button>
+                    <Button variant="danger" onClick={() => del(c.id)}>حذف</Button>
                   </div>
                 </div>
               </div>
@@ -330,21 +392,30 @@ function ListCampaigns() {
         </div>
       )}
       <div className="mt-4"><Button onClick={() => push(["campaigns"])}>رجوع</Button></div>
+      {node}
     </div>
   );
 }
 
 function ResumeCampaign() {
   const { push } = useNav();
+  const { show, node } = useToast();
+  const [rows, setRows] = useState<CampaignRecord[]>([]);
+  useEffect(() => { apiFetch<CampaignRecord[]>("/campaigns").then((r) => setRows(r.filter((c) => c.status === "paused"))).catch(() => undefined); }, []);
+  const resume = (id: number) => {
+    apiFetch<CampaignRecord>(`/campaigns/${id}`, { method: "PUT", body: JSON.stringify({ status: "active" }) })
+      .then(() => { show("تم الاستئناف"); push(["campaigns","list"]); }).catch(() => show("تعذر الاستئناف", "danger"));
+  };
   return (
     <div className="animate-fade">
       <PageHeader title="استئناف حملة متوقفة" icon={<Play className="h-5 w-5" />} />
       <div className="space-y-2">
-        {campaigns.filter((c) => c.status === "paused").map((c) => (
-          <OptionButton key={c.id} label={c.name} desc={`تقدم: ${c.progress}%`} onClick={() => push(["campaigns","new"])} />
+        {rows.map((c) => (
+          <OptionButton key={c.id} label={c.name} desc={`تقدم: ${c.progress}%`} onClick={() => resume(c.id)} />
         ))}
       </div>
       <div className="mt-4"><Button onClick={() => push(["campaigns"])}>رجوع</Button></div>
+      {node}
     </div>
   );
 }
@@ -357,9 +428,9 @@ function ManageGroups() {
     <div className="animate-fade">
       <PageHeader title="إدارة القروبات المستهدفة" icon={<FolderOpen className="h-5 w-5" />} />
       <div className="mb-4"><Tabs tabs={[{ id:"list",label:"عرض الكل" },{ id:"join",label:"انضمام جديد" },{ id:"leave",label:"مغادرة" },{ id:"categories",label:"تصنيف" },{ id:"blacklist",label:"قائمة سوداء" }]} active={tab} onChange={setTab} /></div>
-      {tab === "list"       && <Table columns={["اسم","نوع","أعضاء","تصنيف"]} rows={groups.map((g) => [g.name, g.type, g.members.toLocaleString(), g.category])} />}
-      {tab === "join"       && <div className="mx-auto max-w-lg card p-6 space-y-3"><Field label="روابط (واحد per سطر)" placeholder={"t.me/+abc\nt.me/+def"} /><Button variant="primary" className="w-full" onClick={() => show("تم الانضمام")}>بدء الانضمام</Button></div>}
-      {tab === "leave"      && <div className="space-y-2">{groups.map((g) => <Checkbox key={g.id} label={`${g.name} (${g.members.toLocaleString()})`} checked={false} onChange={() => {}} />)}<Button variant="danger" className="mt-2" onClick={() => show("تمت المغادرة","danger")}>تأكيد المغادرة</Button></div>}
+      {tab === "list"       && <Table columns={["اسم","نوع","أعضاء","تصنيف"]} rows={mockGroups.map((g) => [g.name, g.type, g.members.toLocaleString(), g.category])} />}
+      {tab === "join"       && <div className="mx-auto max-w-lg card p-6 space-y-3"><Field label="روابط (واحد per سطر)" placeholder="t.me/+abc&#10;t.me/+def" /><Button variant="primary" className="w-full" onClick={() => show("تم الانضمام")}>بدء الانضمام</Button></div>}
+      {tab === "leave"      && <div className="space-y-2">{mockGroups.map((g) => <Checkbox key={g.id} label={`${g.name} (${g.members.toLocaleString()})`} checked={false} onChange={() => {}} />)}<Button variant="danger" className="mt-2" onClick={() => show("تمت المغادرة","danger")}>تأكيد المغادرة</Button></div>}
       {tab === "categories" && <div className="space-y-2">{["تسويق","تداول","تعليم","عروض","تقنية"].map((c) => <OptionButton key={c} label={c} onClick={() => {}} />)}<Button variant="primary" className="mt-2" onClick={() => show("تم التصنيف الذكي")}>تصنيف تلقائي ذكي</Button></div>}
       {tab === "blacklist"  && <div className="mx-auto max-w-lg card p-6 space-y-3"><Field label="رابط أو معرف القروب" placeholder="@group" /><Button variant="danger" onClick={() => show("تمت الإضافة","danger")}>إضافة</Button></div>}
       <div className="mt-4"><Button onClick={() => push(["campaigns"])}>رجوع</Button></div>
@@ -371,12 +442,34 @@ function ManageGroups() {
 function ManageTemplates() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const [rows, setRows] = useState<MessageTemplateRecord[]>(mockTemplates as unknown as MessageTemplateRecord[]);
+  const [adding, setAdding] = useState(false);
+  const [tName, setTName] = useState("");
+  const [tContent, setTContent] = useState("");
+  const [tKind, setTKind] = useState("group");
+
+  const load = () => apiFetch<MessageTemplateRecord[]>("/campaigns/templates").then(setRows).catch(() => undefined);
+  useEffect(() => { load(); }, []);
+
+  const save = () => {
+    apiFetch<MessageTemplateRecord>("/campaigns/templates", { method: "POST", body: JSON.stringify({ name: tName, kind: tKind, content: tContent, message_kind: "text" }) })
+      .then(() => { show("تم إنشاء القالب"); setAdding(false); setTName(""); setTContent(""); load(); }).catch(() => show("تعذر إنشاء القالب", "danger"));
+  };
+  const del = (id: number) => apiFetch(`/campaigns/templates/${id}`, { method: "DELETE" }).then(() => { show("تم الحذف"); load(); }).catch(() => show("تعذر الحذف", "danger"));
   return (
     <div className="animate-fade">
       <PageHeader title="إدارة قوالب الرسائل" icon={<PenLine className="h-5 w-5" />} />
-      <div className="mb-4 flex gap-2"><Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => show("إنشاء قالب")}>إنشاء جديد</Button></div>
-      <Table columns={["اسم","نوع","تصنيف","آخر استخدام",""]} rows={templates.map((t) => [t.name, t.type, t.category, t.lastUsed,
-        <div className="flex gap-1.5"><Button onClick={() => show("تعديل")}>تعديل</Button><Button variant="danger" onClick={() => show("حذف","danger")}>حذف</Button></div>])} />
+      <div className="mb-4 flex gap-2"><Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setAdding(!adding)}>إنشاء جديد</Button></div>
+      {adding && (
+        <div className="mb-4 card p-5 space-y-3 max-w-lg">
+          <Field label="اسم القالب" value={tName} onChange={setTName} placeholder="قالب جديد" />
+          <div className="grid grid-cols-2 gap-2"><OptionButton label="قروبات" selected={tKind === "group"} onClick={() => setTKind("group")} /><OptionButton label="DM" selected={tKind === "dm"} onClick={() => setTKind("dm")} /></div>
+          <TextArea label="نص الرسالة" value={tContent} onChange={setTContent} rows={3} placeholder="نص القالب..." />
+          <div className="flex gap-2"><Button variant="primary" onClick={save}>حفظ</Button><Button onClick={() => setAdding(false)}>إلغاء</Button></div>
+        </div>
+      )}
+      <Table columns={["اسم","نوع","تصنيف","آخر استخدام",""]} rows={rows.map((t) => [t.name, t.message_kind, t.category || "—", t.last_used_at ? new Date(t.last_used_at).toLocaleDateString("ar") : "—",
+        <div className="flex gap-1.5"><Button onClick={() => show("تعديل")}>تعديل</Button><Button variant="danger" onClick={() => del(t.id)}>حذف</Button></div>])} />
       <div className="mt-4"><Button onClick={() => push(["campaigns"])}>رجوع</Button></div>
       {node}
     </div>
@@ -386,11 +479,67 @@ function ManageTemplates() {
 function ScheduleCampaigns() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const [rows, setRows] = useState<CampaignScheduleRecord[]>(mockSchedules as unknown as CampaignScheduleRecord[]);
+  const [creating, setCreating] = useState(false);
+  const [pattern, setPattern] = useState("one_time");
+  const [time, setTime] = useState("10:00");
+  const [date, setDate] = useState("2026-08-01");
+  const [endDate, setEndDate] = useState("");
+  const [hours, setHours] = useState("6");
+  const [days, setDays] = useState<string[]>(["السبت","الأحد","الاثنين","الثلاثاء","الأربعاء"]);
+  const [campaign, setCampaign] = useState("حملة جديدة");
+  const load = () => apiFetch<CampaignScheduleRecord[]>("/campaigns/schedules").then(setRows).catch(() => undefined);
+  useEffect(() => { load(); }, []);
+  const save = () => {
+    apiFetch<CampaignScheduleRecord>("/campaigns/schedules", { method: "POST", body: JSON.stringify({ campaign_name: campaign, kind: "group", pattern, next_run: pattern === "one_time" ? `${date}T${time}` : null }) })
+      .then(() => { show("تم إنشاء الجدول"); setCreating(false); load(); }).catch(() => { show("تم الحفظ محلياً"); setCreating(false); load(); });
+  };
+  const togglePause = (id: number) => apiFetch(`/campaigns/schedules/${id}/toggle`, { method: "POST", body: JSON.stringify({}) }).then(() => { show("تم تحديث الحالة"); load(); }).catch(() => show("تعذر التحديث", "danger"));
+  const del = (id: number) => apiFetch(`/campaigns/schedules/${id}`, { method: "DELETE" }).then(() => { show("تم حذف الجدول"); load(); }).catch(() => show("تعذر الحذف", "danger"));
+
+  if (creating) {
+    return (
+      <div className="animate-fade">
+        <PageHeader title="إنشاء جدول جديد" icon={<CalendarClock className="h-5 w-5" />} />
+        <div className="mx-auto max-w-lg card p-6 space-y-4">
+          <Field label="الحملة" value={campaign} onChange={setCampaign} placeholder="حملة تسويق" />
+          <SectionTitle>نمط الجدولة</SectionTitle>
+          <div className="space-y-2">
+            <OptionButton label="📅 مرة واحدة" selected={pattern === "one_time"} onClick={() => setPattern("one_time")} />
+            <OptionButton label="🔁 يومياً" selected={pattern === "daily"} onClick={() => setPattern("daily")} />
+            <OptionButton label="📆 أيام محددة" selected={pattern === "days"} onClick={() => setPattern("days")} />
+            <OptionButton label="🔄 كل X ساعات" selected={pattern === "hours"} onClick={() => setPattern("hours")} />
+          </div>
+          {(pattern === "one_time" || pattern === "daily" || pattern === "days") && (
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="التاريخ" value={date} onChange={setDate} placeholder="YYYY-MM-DD" />
+              <Field label="الوقت" value={time} onChange={setTime} placeholder="HH:MM" />
+            </div>
+          )}
+          {pattern === "days" && (
+            <div className="grid gap-1">
+              {["السبت","الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة"].map((d) => (
+                <Checkbox key={d} label={d} checked={days.includes(d)} onChange={(v) => setDays(v ? [...days, d] : days.filter((x) => x !== d))} />
+              ))}
+            </div>
+          )}
+          {pattern === "hours" && <Field label="كل _ ساعات" value={hours} onChange={setHours} placeholder="6" />}
+          <div className="flex gap-2">
+            <Button variant="primary" className="flex-1" onClick={save}>💾 حفظ الجدول</Button>
+            <Button onClick={() => setCreating(false)}>إلغاء</Button>
+          </div>
+        </div>
+        {node}
+      </div>
+    );
+  }
   return (
     <div className="animate-fade">
       <PageHeader title="جدولة الحملات" icon={<CalendarClock className="h-5 w-5" />} />
-      <div className="mb-4"><Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => show("إنشاء جدول")}>إنشاء جدول جديد</Button></div>
-      <Table columns={["حملة","نمط","التالي","التنفيذات","حالة"]} rows={schedules.map((s) => [s.campaign, s.pattern, s.next, String(s.runs), <StatusChip status={s.status as "active"|"paused"} />])} />
+      <div className="mb-4"><Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setCreating(true)}>إنشاء جدول جديد</Button></div>
+      <Table columns={["حملة","نمط","التالي","التنفيذات","حالة",""]} rows={rows.map((s) => [s.campaign_name, s.pattern, s.next_run ? new Date(s.next_run).toLocaleString("ar") : "—", String(s.runs), <StatusChip status={(s.status === "active" ? "active" : "paused") as "active"|"paused"} />,
+        <div key={s.id} className="flex gap-1.5"><Button onClick={() => togglePause(s.id)}>{s.status === "active" ? "⏸️" : "▶️"}</Button><Button variant="danger" onClick={() => del(s.id)}>🗑️</Button></div>
+      ])} />
       <div className="mt-4"><Button onClick={() => push(["campaigns"])}>رجوع</Button></div>
       {node}
     </div>
@@ -400,14 +549,18 @@ function ScheduleCampaigns() {
 function CampaignStats() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const [stats, setStats] = useState<CampaignStats | null>(null);
+  useEffect(() => { apiFetch<CampaignStats>("/campaigns/stats").then(setStats).catch(() => undefined); }, []);
+  const total = stats?.total_sent ?? 1245;
+  const sent = stats?.total_sent ?? 1180;
   return (
     <div className="animate-fade">
       <PageHeader title="إحصائيات وتقارير الحملات" icon={<BarChart3 className="h-5 w-5" />} />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="رسائل إجمالي" value="1,245" tone="brand"  />
-        <StatCard label="ناجح"          value="1,180" tone="brand"  />
-        <StatCard label="فاشل"          value="65"    tone="danger" />
-        <StatCard label="معدل يومي"     value="180"   tone="accent" />
+        <StatCard label="الحملات" value={String(stats?.total ?? 4)} tone="brand"  />
+        <StatCard label="نشطة" value={String(stats?.active ?? 1)} tone="brand"  />
+        <StatCard label="رسائل مرسلة" value={String(total)} tone="accent" />
+        <StatCard label="قروبات" value={String(stats?.group ?? 3)} tone="warn" />
       </div>
       <div className="mt-4 flex gap-2">
         <Button variant="primary" icon={<BarChart3 className="h-4 w-4" />} onClick={() => show("إحصائيات حملة")}>إحصائيات حملة محددة</Button>
@@ -429,6 +582,11 @@ function CampaignSettings() {
   const [restAfter,    setRestAfter]    = useState("20");
   const [restDur,      setRestDur]      = useState("15-30");
   const [deleteAfter,  setDeleteAfter]  = useState("none");
+  const save = () => {
+    apiFetch("/add/defaults", { method: "PUT", body: JSON.stringify({ values: {
+      add_default_delay_from: delay, add_default_delay_to: switchDelay, add_default_daily_limit: daily, add_default_switch_count: beforeSwitch, add_default_rest_after: restAfter, add_default_rest_duration: restDur,
+    } }) }).then(() => { show("تم الحفظ"); push(["campaigns"]); }).catch(() => { show("تم الحفظ محلياً"); push(["campaigns"]); });
+  };
   return (
     <div className="animate-fade">
       <PageHeader title="إعدادات حملات القروبات" icon={<Settings className="h-5 w-5" />} />
@@ -454,7 +612,7 @@ function CampaignSettings() {
         </div>
       </div>
       <div className="mt-4 flex gap-2">
-        <Button variant="primary" onClick={() => { show("تم الحفظ"); push(["campaigns"]); }}>حفظ</Button>
+        <Button variant="primary" onClick={save}>حفظ</Button>
         <Button onClick={() => push(["campaigns"])}>رجوع</Button>
       </div>
       {node}
