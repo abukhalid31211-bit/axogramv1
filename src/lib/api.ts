@@ -304,16 +304,102 @@ export type SettingItem = {
 export type AuthUser = {
   id: number;
   username: string;
+  email?: string | null;
   full_name?: string | null;
   role: string;
   is_active: boolean;
   created_at: string;
+  // admin-panel / subscription fields
+  platform_admin?: boolean;
+  plan_name?: string | null;
+  modules: string[];
+  quotas: Record<string, number>;
+  expires_at?: string | null;
+  suspended?: boolean;
+  subscription_status?: SubscriptionStatus;
+  remaining_seconds?: number | null;
 };
+
+export type SubscriptionStatus = "active" | "expiring_soon" | "expired" | "suspended";
 
 export type LoginResponse = {
   access_token: string;
   token_type: string;
   user: AuthUser;
+};
+
+export type UserNotices = {
+  subscription_status: SubscriptionStatus;
+  remaining_seconds: number | null;
+  remaining_label: string | null;
+  expires_at: string | null;
+  broadcast: { title: string; message: string; sent_at: string } | null;
+};
+
+// ---------- Admin panel ----------
+export type AdminModuleInfo = { id: string; label: string };
+
+export type SubscriberRecord = {
+  id: number;
+  email: string;
+  status: SubscriptionStatus;
+  remaining_seconds: number | null;
+  remaining_label: string | null;
+  expires_at: string | null;
+  suspended: boolean;
+  plan_name: string | null;
+  modules: string[];
+  quotas: Record<string, number>;
+  accounts_count: number;
+  last_login: string | null;
+  created_at: string;
+};
+
+export type SubscriberDetail = SubscriberRecord & {
+  usage_today: Record<string, number>;
+  active_jobs: number;
+};
+
+export type AdminStats = {
+  total: number;
+  active: number;
+  expiring_soon: number;
+  expired: number;
+  suspended: number;
+};
+
+export type PlanRecord = {
+  id: number;
+  name: string;
+  price_label: string | null;
+  points: string[];
+  modules: string[];
+  quotas: Record<string, number>;
+  subscribers_count: number;
+  created_at: string;
+};
+
+export type UsageRow = {
+  user_id: number;
+  email: string;
+  status: SubscriptionStatus;
+  accounts: number;
+  gather_today: number;
+  add_today: number;
+  dm_today: number;
+  group_today: number;
+  quotas: Record<string, number>;
+  active_jobs: number;
+};
+
+export type AdminLogEntry = {
+  id: number;
+  created_at: string;
+  level: string;
+  action: string;
+  message: string;
+  entity_type?: string | null;
+  entity_id?: string | null;
 };
 
 // ---------- Campaigns ----------

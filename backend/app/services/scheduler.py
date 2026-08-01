@@ -129,6 +129,36 @@ def scheduler_tick() -> dict:
                 db.commit()
                 results["deletions_processed"] += 1
 
+        # 3b) Subscription expiry sweep: stop jobs of expired/suspended subscribers
+        try:
+            from app.services.subscription import sweep_expired_users
+
+            stopped = sweep_expired_users(db)
+            if stopped:
+                results["expired_jobs_stopped"] = stopped
+        except Exception:
+            pass
+
+        # 3c) Retention purge (throttled to once per day): delete subscribers
+        # whose expiry passed more than `expired_retention_days` ago.
+        try:
+            last_purge = get_setting_value(db, "admin_purge_last_run")
+            purge_due = True
+            if last_purge:
+                try:
+                    purge_due = (now - datetime.fromisoformat(last_purge)).total_seconds() >= 86400
+                except Exception:
+                    purge_due = True
+            if purge_due:
+                from app.services.subscription import purge_expired_users
+
+                purged = purge_expired_users(db)
+                if purged:
+                    results["purged_users"] = purged
+                _set_setting(db, "admin_purge_last_run", now.isoformat())
+        except Exception:
+            pass
+
         # 4) Ban monitor tick
         if (get_setting_value(db, "ban_monitor_enabled") or "false").lower() in ("true", "1", "yes"):
             last_run = get_setting_value(db, "ban_monitor_last_run")

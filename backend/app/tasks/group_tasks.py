@@ -27,7 +27,9 @@ def groups_join_run(run_id: str, payload: dict) -> dict:
         if account_ids:
             accounts = db.query(Account).filter(Account.id.in_(account_ids)).all()
         if not accounts:
-            accounts = pick_accounts(db, "gather", count=1)
+            from app.services.subscription import owner_scope_for
+
+            accounts = pick_accounts(db, "gather", count=1, owner_user_id=owner_scope_for(db, actor_user_id))
         if not accounts:
             raise ValueError("لا يوجد حساب متاح للانضمام")
 

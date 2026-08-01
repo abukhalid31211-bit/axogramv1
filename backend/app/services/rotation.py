@@ -185,14 +185,21 @@ def daily_limit_for(db: Session, account: Account, purpose: str) -> int:
     return limit
 
 
-def pick_accounts(db: Session, purpose: str, count: int = 1, exclude_ids: list[int] | None = None) -> list[Account]:
-    """Pick the best accounts for an operation (oldest last-used first, within limits)."""
+def pick_accounts(db: Session, purpose: str, count: int = 1, exclude_ids: list[int] | None = None, owner_user_id: int | None = None) -> list[Account]:
+    """Pick the best accounts for an operation (oldest last-used first, within limits).
+
+    `owner_user_id` restricts the picker to accounts owned by that user —
+    subscribers never run operations through other subscribers' accounts.
+    """
     exclude_ids = exclude_ids or []
     rules = exclusion_rules(db)
     if rules.get("respect_hours") and not is_working_hours(db):
         # still allow, but engines respect the setting; here we don't block hard
         pass
-    accounts = db.query(Account).filter(Account.id.notin_(exclude_ids)).order_by(Account.last_used_at.asc().nullsfirst()).all()
+    query = db.query(Account).filter(Account.id.notin_(exclude_ids))
+    if owner_user_id is not None:
+        query = query.filter(Account.owner_user_id == owner_user_id)
+    accounts = query.order_by(Account.last_used_at.asc().nullsfirst()).all()
     candidates: list[tuple[Account, RotationUsage | None]] = []
     for acc in accounts:
         usage = get_usage(db, acc.id)

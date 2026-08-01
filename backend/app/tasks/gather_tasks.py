@@ -63,7 +63,7 @@ def _parse_post_link(source_label: str) -> tuple[str, int] | None:
     return match.group(1), int(match.group(2))
 
 
-async def _telethon_extract(client, source_label: str, extract_mode: str, limit: int, run_id: str) -> list[dict[str, str]]:
+async def _telethon_extract(client, source_label: str, extract_mode: str, limit: int, run_id: str, actor_user_id: int | None = None, db=None) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
 
     post = _parse_post_link(source_label)
@@ -141,6 +141,10 @@ async def _telethon_extract(client, source_label: str, extract_mode: str, limit:
         entity = await client.get_entity(source_label)
     async for user in client.iter_participants(entity, limit=max(1, limit)):
         jobrunner.wait_if_paused(run_id)
+        if db is not None and len(rows) % 25 == 0:
+            from app.services.subscription import assert_user_allows
+
+            assert_user_allows(db, actor_user_id, "gather")
         if extract_mode == "bots" and not getattr(user, "bot", False):
             continue
         if extract_mode == "online" and not isinstance(getattr(user, "status", None), UserStatusOnline):
@@ -170,11 +174,24 @@ def gather_extract_run(run_id: str, payload: dict) -> dict:
         if extract_mode.startswith("post_") and not POST_RE.search(source_label):
             raise ValueError("رابط المنشور غير صالح — استخدم صيغة t.me/channel/123")
 
+        from app.services.subscription import assert_user_allows
+
+        assert_user_allows(db, actor_user_id, "gather")
+        owner_scope = None
         account = None
         if account_id:
             account = db.query(Account).filter(Account.id == account_id).first()
+            if account:
+                from app.services.subscription import is_platform_admin, owner_scope_for
+
+                owner_scope = owner_scope_for(db, actor_user_id)
+                if owner_scope is not None and account.owner_user_id != owner_scope:
+                    raise ValueError("الحساب المحدد لا يتبع اشتراكك")
         if not account:
-            account = _auto_pick_account(db, "gather")
+            from app.services.subscription import owner_scope_for
+
+            owner_scope = owner_scope_for(db, actor_user_id)
+            account = _auto_pick_account(db, "gather", owner_scope)
         if not account:
             raise ValueError("لا يوجد حساب نشط بجلسة تيليجرام متاحة — أضف حساباً أو فعّل حساباً موجوداً")
 
@@ -183,7 +200,7 @@ def gather_extract_run(run_id: str, payload: dict) -> dict:
 
         jobrunner.update_progress(run_id, 5, f"جاري التجميع من {source_label} عبر {account.phone}...")
         try:
-            rows = asyncio.run(_telethon_extract(client, source_label, extract_mode, limit, run_id))
+            rows = asyncio.run(_telethon_extract(client, source_label, extract_mode, limit, run_id, actor_user_id, db))
         except ValueError:
             raise
         except Exception as exc:
@@ -252,8 +269,8 @@ def gather_extract_run(run_id: str, payload: dict) -> dict:
         db.close()
 
 
-def _auto_pick_account(db: Session, purpose: str) -> Account | None:
-    picked = pick_accounts(db, purpose, count=1)
+def _auto_pick_account(db: Session, purpose: str, owner_user_id: int | None = None) -> Account | None:
+    picked = pick_accounts(db, purpose, count=1, owner_user_id=owner_user_id)
     return picked[0] if picked else None
 
 
@@ -449,7 +466,9 @@ def gather_join_private_run(run_id: str, payload: dict) -> dict:
         if account_ids:
             accounts = db.query(Account).filter(Account.id.in_(account_ids)).all()
         if not accounts:
-            accounts = pick_accounts(db, "gather", count=1)
+            from app.services.subscription import owner_scope_for
+
+            accounts = pick_accounts(db, "gather", count=1, owner_user_id=owner_scope_for(db, actor_user_id))
         if not accounts:
             raise ValueError("لا يوجد حساب متاح للانضمام")
 

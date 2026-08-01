@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, get_current_active_user, require_module
 from app.db.models import AppSetting, Proxy, ProxyPool, User
 from app.schemas.common import MessageResponse
 from app.schemas.proxy import ProxyCreate, ProxyPublic, ProxyUpdate
@@ -37,7 +37,7 @@ def list_proxies(
     return [ProxyPublic.model_validate(row) for row in rows]
 
 
-@router.post("", response_model=ProxyPublic, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ProxyPublic, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_module("proxy"))])
 def create_proxy(payload: ProxyCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> ProxyPublic:
     if db.query(Proxy).filter(Proxy.address == payload.address).first():
         raise HTTPException(status_code=409, detail="البروكسي موجود مسبقاً")
@@ -57,7 +57,7 @@ def list_pools(db: DbSession, current_user: Annotated[User, Depends(get_current_
     return [ProxyPoolPublic.model_validate(row) for row in rows]
 
 
-@router.post("/pools", response_model=ProxyPoolPublic, status_code=status.HTTP_201_CREATED)
+@router.post("/pools", response_model=ProxyPoolPublic, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_module("proxy"))])
 def create_pool(payload: ProxyPoolCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> ProxyPoolPublic:
     if db.query(ProxyPool).filter(ProxyPool.name == payload.name).first():
         raise HTTPException(status_code=409, detail="المجموعة موجودة مسبقاً")
@@ -82,7 +82,7 @@ def get_pool(pool_id: int, db: DbSession, current_user: Annotated[User, Depends(
     )
 
 
-@router.put("/pools/{pool_id}", response_model=ProxyPoolPublic)
+@router.put("/pools/{pool_id}", response_model=ProxyPoolPublic, dependencies=[Depends(require_module("proxy"))])
 def update_pool(pool_id: int, payload: ProxyPoolUpdate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> ProxyPoolPublic:
     row = db.query(ProxyPool).filter(ProxyPool.id == pool_id).first()
     if not row:
@@ -95,7 +95,7 @@ def update_pool(pool_id: int, payload: ProxyPoolUpdate, db: DbSession, current_u
     return ProxyPoolPublic.model_validate(row)
 
 
-@router.delete("/pools/{pool_id}", response_model=MessageResponse)
+@router.delete("/pools/{pool_id}", response_model=MessageResponse, dependencies=[Depends(require_module("proxy"))])
 def delete_pool(pool_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
     row = db.query(ProxyPool).filter(ProxyPool.id == pool_id).first()
     if not row:
@@ -106,7 +106,7 @@ def delete_pool(pool_id: int, db: DbSession, current_user: Annotated[User, Depen
     return MessageResponse(message="تم حذف المجموعة")
 
 
-@router.post("/validate", response_model=dict)
+@router.post("/validate", response_model=dict, dependencies=[Depends(require_module("proxy"))])
 def validate_proxies(
     payload: ProxyValidateBatch,
     db: DbSession,
@@ -168,7 +168,7 @@ def export_proxies(
     return {"count": len(lines), "format": format_value, "content": "\n".join(lines)}
 
 
-@router.post("/replace-dead", response_model=dict)
+@router.post("/replace-dead", response_model=dict, dependencies=[Depends(require_module("proxy"))])
 def replace_dead(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], payload: dict | None = None) -> dict:
     """Replace dead proxies using real checks; optionally accept candidate lines."""
     from app.services import jobrunner
@@ -185,7 +185,7 @@ def replace_dead(db: DbSession, current_user: Annotated[User, Depends(get_curren
     return {"mode": "queued", "message": "بدأ الاستبدال — تابع التقدم من سجل المهام", "job_id": job_id, "replaced": 0, "checked": 0, "remaining_without": 0}
 
 
-@router.put("/general", response_model=MessageResponse)
+@router.put("/general", response_model=MessageResponse, dependencies=[Depends(require_module("proxy"))])
 def update_proxy_general(payload: ProxyGeneralSettingsUpdate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
     import json
     from app.core.crypto import encrypt_value
@@ -200,7 +200,7 @@ def update_proxy_general(payload: ProxyGeneralSettingsUpdate, db: DbSession, cur
     return MessageResponse(message="تم حفظ إعدادات البروكسي العامة")
 
 
-@router.put("/notifications", response_model=MessageResponse)
+@router.put("/notifications", response_model=MessageResponse, dependencies=[Depends(require_module("proxy"))])
 def update_proxy_notifications(payload: ProxyNotificationsUpdate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
     import json
     from app.core.crypto import encrypt_value
@@ -217,7 +217,7 @@ def update_proxy_notifications(payload: ProxyNotificationsUpdate, db: DbSession,
 
 # ---------- Parametrized routes ----------
 
-@router.post("/{proxy_id}/pool/{pool_id}", response_model=ProxyPublic)
+@router.post("/{proxy_id}/pool/{pool_id}", response_model=ProxyPublic, dependencies=[Depends(require_module("proxy"))])
 def add_to_pool(proxy_id: int, pool_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> ProxyPublic:
     row = db.query(Proxy).filter(Proxy.id == proxy_id).first()
     if not row:
@@ -239,7 +239,7 @@ def get_proxy(proxy_id: int, db: DbSession, current_user: Annotated[User, Depend
     return ProxyPublic.model_validate(row)
 
 
-@router.put("/{proxy_id}", response_model=ProxyPublic)
+@router.put("/{proxy_id}", response_model=ProxyPublic, dependencies=[Depends(require_module("proxy"))])
 def update_proxy(proxy_id: int, payload: ProxyUpdate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> ProxyPublic:
     row = db.query(Proxy).filter(Proxy.id == proxy_id).first()
     if not row:
@@ -253,7 +253,7 @@ def update_proxy(proxy_id: int, payload: ProxyUpdate, db: DbSession, current_use
     return ProxyPublic.model_validate(row)
 
 
-@router.delete("/{proxy_id}", response_model=MessageResponse)
+@router.delete("/{proxy_id}", response_model=MessageResponse, dependencies=[Depends(require_module("proxy"))])
 def delete_proxy(proxy_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
     row = db.query(Proxy).filter(Proxy.id == proxy_id).first()
     if not row:

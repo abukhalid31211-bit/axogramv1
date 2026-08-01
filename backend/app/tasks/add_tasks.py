@@ -249,6 +249,9 @@ async def _run_add_loop_async(
     client = None
     use_count = 0
     blocked_accounts: set[int] = set()
+    from app.services.subscription import assert_user_allows, owner_scope_for
+
+    owner_scope = owner_scope_for(db, actor_user_id)
 
     jobrunner.update_progress(run_id, 2, f"جاري تجهيز الإضافة إلى {target_label} ({total} مستخدم)")
 
@@ -268,7 +271,7 @@ async def _run_add_loop_async(
         if client is not None and use_count < switch_count:
             return True
         await close_client()
-        picked = pick_accounts(db, "add", count=1, exclude_ids=list(blocked_accounts))
+        picked = pick_accounts(db, "add", count=1, exclude_ids=list(blocked_accounts), owner_user_id=owner_scope)
         if not picked:
             return False
         current_account = picked[0]
@@ -287,8 +290,11 @@ async def _run_add_loop_async(
         return True
 
     try:
+        assert_user_allows(db, actor_user_id, "add")
         for index, row in enumerate(users):
             jobrunner.wait_if_paused(run_id)
+            if index % 10 == 0:
+                assert_user_allows(db, actor_user_id, "add")
             target = _recipient_target(row)
             if not target:
                 counts["skipped_count"] += 1
@@ -301,7 +307,7 @@ async def _run_add_loop_async(
                 continue
 
             if not await ensure_client():
-                if not pick_accounts(db, "add", count=1, exclude_ids=list(blocked_accounts)):
+                if not pick_accounts(db, "add", count=1, exclude_ids=list(blocked_accounts), owner_user_id=owner_scope):
                     raise ValueError("لا يوجد حساب متاح ضمن الحدود اليومية — أضف حسابات أو انتظر تجديد الحدود")
                 counts["failed_count"] += 1
                 failure_reasons["لا يوجد حساب متاح"] = failure_reasons.get("لا يوجد حساب متاح", 0) + 1

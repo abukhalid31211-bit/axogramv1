@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import func
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, get_current_active_user, require_module
 from app.db.models import Account, ActivityLog, AddOperation, Campaign, GatherExport, Proxy, RotationUsage, User
 from app.schemas.report import ActivityLogPublic, DashboardSummary
 from app.schemas.report_ext import AccountPerformance, AdvancedAnalytics, LeaderboardRow, LogManagementSummary
@@ -200,7 +200,7 @@ def _best_week(db, month_start: datetime) -> int:
     return best
 
 
-@router.get("/massdm-log", response_model=list[dict])
+@router.get("/massdm-log", response_model=list[dict], dependencies=[Depends(require_module("reports"))])
 def massdm_log(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], limit: int = 50) -> list[dict]:
     dm_campaigns = db.query(Campaign).filter(Campaign.kind == "dm").order_by(Campaign.created_at.desc()).limit(limit).all()
     return [
@@ -296,7 +296,7 @@ def log_management_summary(db: DbSession, current_user: Annotated[User, Depends(
     return LogManagementSummary(total_logs=count, log_size_mb=max(1, count // 250))
 
 
-@router.delete("/logs", response_model=dict)
+@router.delete("/logs", response_model=dict, dependencies=[Depends(require_module("reports"))])
 def manage_logs(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], older_than_days: int = 30, clear_all: bool = False) -> dict:
     if clear_all:
         db.query(ActivityLog).delete()
@@ -308,7 +308,7 @@ def manage_logs(db: DbSession, current_user: Annotated[User, Depends(get_current
     return {"message": "تم حذف السجلات المحددة"}
 
 
-@router.get("/export")
+@router.get("/export", dependencies=[Depends(require_module("reports"))])
 def export_report(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], period: str = "week", format_value: str = "pdf") -> Response:
     """Export a report (pdf / csv / txt)."""
     if period == "today":

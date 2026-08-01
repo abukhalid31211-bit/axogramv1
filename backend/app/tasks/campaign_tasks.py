@@ -223,6 +223,9 @@ async def _run_dm_loop(*, db: Session, run_id: str, campaign: Campaign, recipien
     current_account: Account | None = None
     client = None
     use_count = 0
+    from app.services.subscription import assert_user_allows, owner_scope_for
+
+    owner_scope = owner_scope_for(db, actor_user_id)
 
     jobrunner.update_progress(run_id, 2, f"جاري تجهيز إرسال {total} رسالة...")
 
@@ -240,7 +243,7 @@ async def _run_dm_loop(*, db: Session, run_id: str, campaign: Campaign, recipien
         if client is not None and use_count < switch_count:
             return True
         await close_client()
-        picked = pick_accounts(db, "dm", count=1, exclude_ids=list(blocked_accounts))
+        picked = pick_accounts(db, "dm", count=1, exclude_ids=list(blocked_accounts), owner_user_id=owner_scope)
         if not picked:
             return False
         current_account = picked[0]
@@ -259,8 +262,11 @@ async def _run_dm_loop(*, db: Session, run_id: str, campaign: Campaign, recipien
         return True
 
     try:
+        assert_user_allows(db, actor_user_id, "dm")
         for index, recipient in enumerate(recipients):
             jobrunner.wait_if_paused(run_id)
+            if index % 10 == 0:
+                assert_user_allows(db, actor_user_id, "dm")
             target = _resolve_target(recipient)
             if not target:
                 counts["skipped"] += 1
@@ -272,7 +278,7 @@ async def _run_dm_loop(*, db: Session, run_id: str, campaign: Campaign, recipien
                 continue
 
             if not await ensure_client():
-                if not pick_accounts(db, "dm", count=1, exclude_ids=list(blocked_accounts)):
+                if not pick_accounts(db, "dm", count=1, exclude_ids=list(blocked_accounts), owner_user_id=owner_scope):
                     raise ValueError("لا يوجد حساب متاح ضمن الحدود اليومية — أضف حسابات أو انتظر تجديد الحدود")
                 counts["failed"] += 1
                 failed_list.append(str(recipient.get("user_id") or recipient.get("username") or target))
@@ -431,6 +437,9 @@ async def _run_group_loop(*, db: Session, run_id: str, campaign: Campaign, group
     current_account: Account | None = None
     client = None
     use_count = 0
+    from app.services.subscription import assert_user_allows, owner_scope_for
+
+    owner_scope = owner_scope_for(db, actor_user_id)
 
     jobrunner.update_progress(run_id, 2, f"جاري تجهيز الإرسال إلى {total} قروب...")
 
@@ -448,7 +457,7 @@ async def _run_group_loop(*, db: Session, run_id: str, campaign: Campaign, group
         if client is not None and use_count < switch_count:
             return True
         await close_client()
-        picked = pick_accounts(db, "group", count=1, exclude_ids=list(blocked_accounts))
+        picked = pick_accounts(db, "group", count=1, exclude_ids=list(blocked_accounts), owner_user_id=owner_scope)
         if not picked:
             return False
         current_account = picked[0]
@@ -467,8 +476,11 @@ async def _run_group_loop(*, db: Session, run_id: str, campaign: Campaign, group
         return True
 
     try:
+        assert_user_allows(db, actor_user_id, "group")
         for index, group in enumerate(groups):
             jobrunner.wait_if_paused(run_id)
+            if index % 10 == 0:
+                assert_user_allows(db, actor_user_id, "group")
             group_name = group.get("name") or ""
             if not group_name:
                 counts["failed"] += 1
@@ -477,7 +489,7 @@ async def _run_group_loop(*, db: Session, run_id: str, campaign: Campaign, group
             group_link = group_name if group_name.startswith(("http", "t.me/")) else f"https://t.me/{group_name.lstrip('@')}"
 
             if not await ensure_client():
-                if not pick_accounts(db, "group", count=1, exclude_ids=list(blocked_accounts)):
+                if not pick_accounts(db, "group", count=1, exclude_ids=list(blocked_accounts), owner_user_id=owner_scope):
                     raise ValueError("لا يوجد حساب متاح ضمن الحدود اليومية")
                 counts["failed"] += 1
                 failed_groups.append({"group": group_name, "reason": "لا يوجد حساب متاح", "attempts": 1})
