@@ -191,7 +191,7 @@ function SmartLimits() {
         </div>
       )}
       <div className="mt-4 flex flex-wrap gap-2">
-        <Button variant="primary" disabled={applying} onClick={() => { setApplying(true); setTimeout(() => { setApplying(false); show("تم تطبيق الحدود الموصى بها على كل الحسابات"); }, 1200); }}>{applying ? "جاري التطبيق..." : "تطبيق الحدود الموصى بها"}</Button>
+        <Button variant="primary" disabled={applying} onClick={async () => { setApplying(true); try { await apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key: "smart_limits_applied", value: "true", is_secret: false }] }) }); show("تم تطبيق الحدود الموصى بها على كل الحسابات"); } catch (err) { show(err instanceof Error ? err.message : "تعذر التطبيق", "danger"); } finally { setApplying(false); } }}>{applying ? "جاري التطبيق..." : "تطبيق الحدود الموصى بها"}</Button>
         <Button onClick={() => setShowImpact(!showImpact)}>📊 عرض تأثير الحدود الحالية</Button>
         <Button onClick={() => { apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key: "security_level", value: level, is_secret: false, description: "security level" }] }) }).then(() => show("تم حفظ إعدادات الحدود الذكية")).catch((err) => show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger")); push(["security"]); }}>💾 حفظ إعدادات الحدود الذكية</Button>
         <Button onClick={() => push(["security"])}>رجوع</Button>

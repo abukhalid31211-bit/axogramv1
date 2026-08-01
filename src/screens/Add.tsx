@@ -39,7 +39,7 @@ export function AddModule() {
     { id:"logs",      label:"سجلات وإحصائيات الإضافة",    desc:"تاريخ العمليات",           icon:BarChart3 },
     { id:"defaults",  label:"إعدادات الإضافة الافتراضية", desc:"تهيئة السلوك الافتراضي",   icon:Settings  },
   ];
-  const todayAdded = stats?.total_success ?? 1842;
+  const todayAdded = stats?.total_success ?? 0;
   const successRate = stats ? Math.max(0, Math.round((stats.total_success / Math.max(1, stats.total_success + stats.total_failed + stats.total_skipped)) * 100)) : 94;
   return (
     <div className="animate-fade">

@@ -1989,7 +1989,7 @@ function HealthScore() {
       <div className="mb-4 flex flex-wrap gap-2">
         <Button variant="ghost" onClick={() => setExplain(!explain)}>ℹ️ شرح نظام الدرجات</Button>
         <Button variant={weakOnly ? "primary" : "ghost"} onClick={() => setWeakOnly(!weakOnly)}>⚠️ الضعيفة فقط (&lt;70%)</Button>
-        <Button onClick={() => { show("جاري إعادة الحساب..."); setTimeout(() => show("✅ تم تحديث جميع الدرجات"), 1200); }}>🔄 إعادة حساب الدرجات</Button>
+        <Button onClick={async () => { show("جاري إعادة الحساب..."); try { await apiFetch("/accounts/usage/reset", { method: "POST" }); show("✅ تم تحديث جميع الدرجات"); await load(); } catch (err) { show(err instanceof Error ? err.message : "تعذر إعادة الحساب", "danger"); } }}>🔄 إعادة حساب الدرجات</Button>
       </div>
       {explain && (
         <div className="mb-4 card p-5">
