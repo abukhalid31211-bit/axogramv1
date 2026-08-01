@@ -636,6 +636,20 @@ function ExportSessions() {
   );
 }
 
+const classLabels: Record<string, { icon: string; color: string }> = {
+  primary: { icon: "🔴", color: "bg-red-50 text-red-700 ring-red-200" },
+  backup: { icon: "🟡", color: "bg-yellow-50 text-yellow-700 ring-yellow-200" },
+  gather: { icon: "🟢", color: "bg-green-50 text-green-700 ring-green-200" },
+  add: { icon: "🔵", color: "bg-blue-50 text-blue-700 ring-blue-200" },
+  multi: { icon: "⚪", color: "bg-gray-50 text-gray-700 ring-gray-200" },
+};
+
+function ClassChip({ cls }: { cls: string }) {
+  const l = classLabels[cls] || classLabels.multi;
+  const labels: Record<string, string> = { primary: "رئيسي", backup: "احتياطي", gather: "تجميع", add: "إضافة", multi: "متعدد" };
+  return <span className={`chip ring-1 ${l.color}`}>{l.icon} {labels[cls] || cls}</span>;
+}
+
 function ListAccounts() {
   const { push } = useNav();
   const { show, node } = useToast();
@@ -643,19 +657,26 @@ function ListAccounts() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | AccountRecord["status"]>("all");
+  const [classFilter, setClassFilter] = useState<string>("all");
+  const [poolFilter, setPoolFilter] = useState<number | null>(null);
+  const [healthFilter, setHealthFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<string>("default");
   const [selected, setSelected] = useState<number[]>([]);
   const [confirmDel, setConfirmDel] = useState(false);
   const [proxies, setProxies] = useState<ProxyRecord[]>([]);
+  const [pools, setPools] = useState<AccountPool[]>([]);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [accountsData, proxiesData] = await Promise.all([
+      const [accountsData, proxiesData, poolsData] = await Promise.all([
         apiFetch<AccountRecord[]>(`/accounts${search || filter !== "all" ? `?${new URLSearchParams({ ...(search ? { search } : {}), ...(filter !== "all" ? { status: filter } : {}) }).toString()}` : ""}`),
         apiFetch<ProxyRecord[]>("/proxies"),
+        apiFetch<AccountPool[]>("/accounts/pools"),
       ]);
       setRows(accountsData);
       setProxies(proxiesData);
+      setPools(poolsData);
     } catch (err) {
       show(err instanceof Error ? err.message : "تعذر جلب الحسابات", "danger");
     } finally {
@@ -670,12 +691,22 @@ function ListAccounts() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows.filter((row) => {
+    let result = rows.filter((row) => {
       if (filter !== "all" && row.status !== filter) return false;
+      if (classFilter !== "all" && row.classification !== classFilter) return false;
+      if (poolFilter !== null && row.pool_id !== poolFilter) return false;
+      if (healthFilter === "excellent" && row.health_score < 90) return false;
+      if (healthFilter === "good" && (row.health_score < 70 || row.health_score >= 90)) return false;
+      if (healthFilter === "medium" && (row.health_score < 50 || row.health_score >= 70)) return false;
+      if (healthFilter === "weak" && row.health_score >= 50) return false;
       if (!q) return true;
       return [row.name, row.phone, row.username || ""].some((v) => v.toLowerCase().includes(q));
     });
-  }, [rows, search, filter]);
+    if (sortBy === "health") result.sort((a, b) => b.health_score - a.health_score);
+    else if (sortBy === "last_used") result.sort((a, b) => (b.last_used_at || "").localeCompare(a.last_used_at || ""));
+    else if (sortBy === "age") result.sort((a, b) => a.created_at.localeCompare(b.created_at));
+    return result;
+  }, [rows, search, filter, classFilter, poolFilter, healthFilter, sortBy]);
 
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
@@ -710,11 +741,75 @@ function ListAccounts() {
           onChange={(value) => setFilter(value as typeof filter)}
         />
         <div className="flex flex-wrap gap-2">
+          <OptionButton label="كل التصنيفات" selected={classFilter === "all"} onClick={() => setClassFilter("all")} />
+          {Object.entries(classLabels).map(([k, v]) => (
+            <OptionButton key={k} label={`${v.icon} ${k}`} selected={classFilter === k} onClick={() => setClassFilter(k)} />
+          ))}
+        </div>
+        {pools.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            <OptionButton label="كل المجموعات" selected={poolFilter === null} onClick={() => setPoolFilter(null)} />
+            {pools.map((p) => (
+              <OptionButton key={p.id} label={p.name} selected={poolFilter === p.id} onClick={() => setPoolFilter(poolFilter === p.id ? null : p.id)} />
+            ))}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <OptionButton label="كل الصحة" selected={healthFilter === "all"} onClick={() => setHealthFilter("all")} />
+          <OptionButton label="🟢 ممتاز 90-100%" selected={healthFilter === "excellent"} onClick={() => setHealthFilter("excellent")} />
+          <OptionButton label="🟡 جيد 70-89%" selected={healthFilter === "good"} onClick={() => setHealthFilter("good")} />
+          <OptionButton label="🟠 متوسط 50-69%" selected={healthFilter === "medium"} onClick={() => setHealthFilter("medium")} />
+          <OptionButton label="🔴 ضعيف <50%" selected={healthFilter === "weak"} onClick={() => setHealthFilter("weak")} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="text-xs text-surface-500 self-center">ترتيب:</span>
+          <OptionButton label="افتراضي" selected={sortBy === "default"} onClick={() => setSortBy("default")} />
+          <OptionButton label="📊 الصحة (تنازلي)" selected={sortBy === "health"} onClick={() => setSortBy("health")} />
+          <OptionButton label="🕐 آخر استخدام" selected={sortBy === "last_used"} onClick={() => setSortBy("last_used")} />
+          <OptionButton label="📅 العمر (الأقدم)" selected={sortBy === "age"} onClick={() => setSortBy("age")} />
+        </div>
+        <div className="flex flex-wrap gap-2">
           <Button onClick={() => setSelected(filtered.map((a) => a.id))}>تحديد الكل</Button>
           <Button onClick={() => setSelected([])}>إلغاء الكل</Button>
           <Button disabled={selected.length === 0} icon={<Flame className="h-4 w-4" />} onClick={() => { show(`جاري تجهيز تسخين ${selected.length} حساب`); push(["accounts","warmup"]); }}>🔥 تسخين المحدد</Button>
           <Button disabled={selected.length === 0} icon={<ShieldCheck className="h-4 w-4" />} onClick={() => { show(`جاري تجهيز تحقق ${selected.length} حساب`); push(["accounts","validate"]); }}>✅ تحقق من المحدد</Button>
           <Button disabled={selected.length === 0} icon={<Globe className="h-4 w-4" />} onClick={() => show("اختر بروكسي لتعيينه للمحدد — متاح من مدير البروكسي")}>🌐 تعيين بروكسي</Button>
+          {selected.length > 0 && (
+            <>
+              <select className="rounded-lg border border-surface-200 bg-white px-3 py-2 text-xs" onChange={async (e) => {
+                const cls = e.target.value;
+                if (!cls) return;
+                try {
+                  await Promise.all(selected.map((id) => apiFetch(`/accounts/${id}`, { method: "PUT", body: JSON.stringify({ classification: cls }) })));
+                  show(`تم تغيير تصنيف ${selected.length} حساب`);
+                  await load();
+                } catch (err) { show("تعذر تغيير التصنيف", "danger"); }
+                e.target.value = "";
+              }}>
+                <option value="">🏷️ تغيير تصنيف المحدد</option>
+                <option value="primary">🔴 رئيسي</option>
+                <option value="backup">🟡 احتياطي</option>
+                <option value="gather">🟢 تجميع</option>
+                <option value="add">🔵 إضافة</option>
+                <option value="multi">⚪ متعدد</option>
+              </select>
+              {pools.length > 0 && (
+                <select className="rounded-lg border border-surface-200 bg-white px-3 py-2 text-xs" onChange={async (e) => {
+                  const poolId = e.target.value;
+                  if (!poolId) return;
+                  try {
+                    await Promise.all(selected.map((id) => apiFetch(`/accounts/${id}/pool/${poolId}`, { method: "POST", body: JSON.stringify({}) })));
+                    show(`تم نقل ${selected.length} حساب للمجموعة`);
+                    await load();
+                  } catch (err) { show("تعذر النقل", "danger"); }
+                  e.target.value = "";
+                }}>
+                  <option value="">👥 نقل المحدد لمجموعة</option>
+                  {pools.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              )}
+            </>
+          )}
           <Button variant="danger" disabled={selected.length === 0} icon={<Trash2 className="h-4 w-4" />} onClick={() => setConfirmDel(true)}>
             حذف المحدد ({selected.length})
           </Button>
@@ -725,14 +820,17 @@ function ListAccounts() {
         <EmptyState icon={<Users className="h-8 w-8" />} title="لا توجد حسابات مطابقة" desc="جرّب تغيير الفلاتر أو أضف حسابًا جديدًا." />
       ) : (
         <Table
-          columns={["", "#", "الهاتف", "الاسم", "الحالة", "البروكسي", "آخر استخدام", "", ""]}
+          columns={["", "#", "الهاتف", "الاسم", "التصنيف", "الصحة", "الحالة", "البروكسي", "المجموعة", "آخر استخدام", "", ""]}
           rows={filtered.map((account, index) => [
             <input type="checkbox" checked={selected.includes(account.id)} onChange={() => toggle(account.id)} className="h-4 w-4 accent-brand-600" />,
             String(index + 1),
             account.phone,
             account.name,
+            <ClassChip cls={account.classification} />,
+            <div className="min-w-[80px]"><Progress value={account.health_score} tone={account.health_score >= 75 ? "brand" : account.health_score >= 50 ? "warn" : "danger"} /></div>,
             <StatusChip status={account.status} />,
             proxies.find((p) => p.id === account.proxy_id)?.address || "—",
+            pools.find((p) => p.id === account.pool_id)?.name || "—",
             account.last_used_label || "—",
             <Button onClick={() => push(["accounts", "detail", String(account.id)])}>تفاصيل</Button>,
             <Button variant="ghost" onClick={() => push(["accounts", "remove"])}>إزالة</Button>,
@@ -826,7 +924,7 @@ export function AccountDetail({ id }: { id: string }) {
   if (!account) return <EmptyState title="الحساب غير موجود" desc="ربما تم حذفه أو تغيّر المعرّف." />;
 
   const currentProxy = proxies.find((p) => p.id === account.proxy_id);
-  const health = Math.max(35, Math.min(96, 60 + (account.groups_count || 0)));
+  const health = account.health_score;
 
   return (
     <div className="animate-fade">
@@ -840,9 +938,21 @@ export function AccountDetail({ id }: { id: string }) {
             <InlineEdit label="ملاحظات" value={account.notes || ""} onSave={(value) => setAccount({ ...account, notes: value })} placeholder="لا توجد ملاحظات" />
             <Row label="الهاتف" value={account.phone} />
             <Row label="الحالة" value={<StatusChip status={account.status} />} />
+            <Row label="التصنيف" value={<ClassChip cls={account.classification} />} />
             <Row label="آخر استخدام" value={account.last_used_label || "—"} />
             <Row label="عمر الحساب" value={account.age_label || "—"} />
             <Row label="عدد القروبات" value={String(account.groups_count)} />
+            <Row label="تاريخ الإنشاء (تيليجرام)" value={account.telegram_created_at || "—"} />
+            <Row label="Data Center" value={account.data_center || "—"} />
+            <Row label="Device Model" value={account.device_model || "—"} />
+          </div>
+
+          <div className="card p-5 space-y-3">
+            <SectionTitle>إحصائيات الحساب</SectionTitle>
+            <Row label="إجمالي تجميع" value={String(account.gather_count)} />
+            <Row label="إجمالي إضافة" value={String(account.add_count)} />
+            <Row label="إجمالي رسائل DM" value={String(account.dm_count)} />
+            <Row label="FloodWaits" value={String(account.flood_waits_count)} />
           </div>
 
           <div className="card p-5 space-y-3">
@@ -859,18 +969,29 @@ export function AccountDetail({ id }: { id: string }) {
 
         <div className="space-y-4">
           <div className="card p-5 space-y-3">
-            <SectionTitle>درجة الصحة التقديرية</SectionTitle>
+            <SectionTitle>التصنيف</SectionTitle>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(classLabels).map(([k, v]) => (
+                <OptionButton key={k} label={`${v.icon} ${k === "primary" ? "رئيسي" : k === "backup" ? "احتياطي" : k === "gather" ? "تجميع" : k === "add" ? "إضافة" : "متعدد"}`} selected={account.classification === k} onClick={() => setAccount({ ...account, classification: k })} />
+              ))}
+            </div>
+          </div>
+
+          <div className="card p-5 space-y-3">
+            <SectionTitle>درجة الصحة</SectionTitle>
             <Progress value={health} label={`${health}%`} tone={health >= 75 ? "brand" : health >= 50 ? "warn" : "danger"} />
             <div className="text-xs text-surface-500">
-              يتم حسابها حالياً بناءً على الحالة الحالية وعدد القروبات وآخر استخدام، إلى حين ربط محرك Telethon الكامل.
+              {health >= 90 ? "🟢 ممتاز — حساب آمن تماماً" : health >= 70 ? "🟡 جيد — يعمل بشكل طبيعي" : health >= 50 ? "🟠 متوسط — يحتاج تسخين" : "🔴 ضعيف — خطر استخدامه"}
             </div>
           </div>
 
           <div className="card p-5 space-y-2">
             <SectionTitle>الإجراءات</SectionTitle>
             <Button variant="primary" className="w-full" onClick={() => void save()} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ التعديلات"}</Button>
-            <Button className="w-full" onClick={() => void load()}>تحديث من السيرفر</Button>
-            <Button className="w-full" onClick={() => push(["accounts", "activity"])}>عرض السجلات</Button>
+            <Button className="w-full" onClick={() => void load()}>🔄 تحديث معلومات الحساب</Button>
+            <Button className="w-full" onClick={() => push(["accounts", "activity"])}>📋 سجل نشاط هذا الحساب</Button>
+            <Button className="w-full" onClick={() => push(["accounts", "warmup"])}>🔥 تسخين هذا الحساب</Button>
+            <Button className="w-full" onClick={() => push(["accounts", "settings-ind"])}>⚙️ إعدادات خاصة بهذا الحساب</Button>
             <Button variant="danger" className="w-full" icon={<Trash2 className="h-4 w-4" />} onClick={() => setConfirmDel(true)}>حذف هذا الحساب</Button>
             <Button className="w-full" onClick={() => push(["accounts", "list"])}>رجوع للقائمة</Button>
           </div>
@@ -1303,6 +1424,7 @@ function IndividualSettings() {
   const { show, node } = useToast();
   const allAccounts = useAccounts();
   const [selected, setSelected] = useState<number|null>(null);
+  const [loading, setLoading] = useState(false);
   const [gatherLimit, setGatherLimit] = useState("500");
   const [addLimit, setAddLimit]       = useState("20");
   const [dmLimit, setDmLimit]         = useState("30");
@@ -1314,13 +1436,68 @@ function IndividualSettings() {
   const [fromH, setFromH]             = useState("08:00");
   const [toH, setToH]                 = useState("22:00");
 
+  useEffect(() => {
+    if (selected === null) return;
+    setLoading(true);
+    apiFetch<any>(`/accounts/${selected}/settings`)
+      .then((data) => {
+        setGatherLimit(String(data.gather_limit || 500));
+        setAddLimit(String(data.add_limit || 20));
+        setDmLimit(String(data.dm_limit || 30));
+        setDelayFrom(String(data.delay_min || 60));
+        setDelayTo(String(data.delay_max || 120));
+        setPriority(data.priority || "mid");
+        setPerms({
+          gather: data.allow_gather !== false,
+          add: data.allow_add !== false,
+          dm: data.allow_dm !== false,
+          campaign: data.allow_campaign !== false,
+          rotation: data.allow_rotation !== false,
+        });
+        setLimitHours(data.limit_work_hours || false);
+        setFromH(data.work_hours_from || "08:00");
+        setToH(data.work_hours_to || "22:00");
+      })
+      .catch(() => {/* use defaults */})
+      .finally(() => setLoading(false));
+  }, [selected]);
+
+  const saveSettings = async () => {
+    if (selected === null) return;
+    try {
+      await apiFetch(`/accounts/${selected}/settings`, {
+        method: "PUT",
+        body: JSON.stringify({
+          gather_limit: Number(gatherLimit),
+          add_limit: Number(addLimit),
+          dm_limit: Number(dmLimit),
+          delay_min: Number(delayFrom),
+          delay_max: Number(delayTo),
+          priority,
+          allow_gather: perms.gather,
+          allow_add: perms.add,
+          allow_dm: perms.dm,
+          allow_campaign: perms.campaign,
+          allow_rotation: perms.rotation,
+          limit_work_hours: limitHours,
+          work_hours_from: fromH,
+          work_hours_to: toH,
+        }),
+      });
+      show("💾 تم حفظ الإعدادات الفردية");
+      setSelected(null);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر الحفظ", "danger");
+    }
+  };
+
   if (selected === null) {
     return (
       <div className="animate-fade">
         <PageHeader title="إعدادات فردية للحساب" icon={<Settings2 className="h-5 w-5" />} />
         <div className="space-y-2">
           {allAccounts.map((a) => (
-            <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} desc={a.status} onClick={() => setSelected(a.id)} />
+            <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} desc={`${a.status} | ${a.classification}`} onClick={() => setSelected(a.id)} />
           ))}
         </div>
       </div>
@@ -1331,6 +1508,7 @@ function IndividualSettings() {
   return (
     <div className="animate-fade">
       <PageHeader title={`إعدادات: ${acc.name}`} subtitle={acc.phone} icon={<Settings2 className="h-5 w-5" />} />
+      {loading ? <Spinner label="جاري تحميل الإعدادات..." /> : (
       <div className="space-y-4">
         <div className="card p-5 space-y-3">
           <SectionTitle>الحدود اليومية الخاصة</SectionTitle>
@@ -1367,10 +1545,11 @@ function IndividualSettings() {
           )}
         </div>
         <div className="flex gap-2">
-          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key: `account_limit_add_${selected}`, value: addLimit, is_secret: false, description: "account add limit" }] }) }).then(() => show("💾 تم حفظ الإعدادات")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); setSelected(null); }}>💾 حفظ الإعدادات</Button>
+          <Button variant="primary" className="flex-1" onClick={() => void saveSettings()}>💾 حفظ الإعدادات</Button>
           <Button onClick={() => setSelected(null)}>🔙 رجوع</Button>
         </div>
       </div>
+      )}
       {node}
     </div>
   );
@@ -1800,7 +1979,7 @@ function HealthScore() {
 
   const healthData = rows.map((account) => ({
     ...account,
-    score: Math.max(35, Math.min(96, (account.status === "active" ? 72 : account.status === "restricted" ? 54 : 38) + Math.min(account.groups_count, 20))),
+    score: account.health_score,
   })).sort((a, b) => b.score - a.score);
   const shown = weakOnly ? healthData.filter((a) => a.score < 70) : healthData;
 
@@ -1810,7 +1989,7 @@ function HealthScore() {
       <div className="mb-4 flex flex-wrap gap-2">
         <Button variant="ghost" onClick={() => setExplain(!explain)}>ℹ️ شرح نظام الدرجات</Button>
         <Button variant={weakOnly ? "primary" : "ghost"} onClick={() => setWeakOnly(!weakOnly)}>⚠️ الضعيفة فقط (&lt;70%)</Button>
-        <Button onClick={() => { show("جاري إعادة الحساب..."); setTimeout(() => show("✅ تم تحديث جميع الدرجات"), 1200); }}>🔄 إعادة حساب الدرجات</Button>
+        <Button onClick={async () => { show("جاري إعادة الحساب..."); try { await apiFetch("/accounts/usage/reset", { method: "POST" }); show("✅ تم تحديث جميع الدرجات"); await load(); } catch (err) { show(err instanceof Error ? err.message : "تعذر إعادة الحساب", "danger"); } }}>🔄 إعادة حساب الدرجات</Button>
       </div>
       {explain && (
         <div className="mb-4 card p-5">
@@ -1825,6 +2004,7 @@ function HealthScore() {
             <div>عمر الحساب 20%</div><div>نشاط سابق 20%</div><div>FloodWaits 15%</div><div>القروبات 15%</div>
             <div>صورة/بيو 10%</div><div>جهات الاتصال 10%</div><div>سجل الإجراءات 10%</div>
           </div>
+          <div className="mt-3 text-xs text-surface-500">الدرجة محسوبة من: الحالة + عدد القروبات + عمر الحساب + آخر استخدام + FloodWaits + نشاط التجميع/الإضافة/الرسائل.</div>
         </div>
       )}
       {loading ? <Spinner label="جاري احتساب الدرجات..." /> : shown.length === 0 ? (

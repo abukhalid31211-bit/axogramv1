@@ -86,8 +86,18 @@ export type AccountRecord = {
   name: string;
   username?: string | null;
   status: "active" | "blocked" | "restricted";
+  classification: string;
   proxy_id?: number | null;
+  pool_id?: number | null;
   groups_count: number;
+  health_score: number;
+  gather_count: number;
+  add_count: number;
+  dm_count: number;
+  flood_waits_count: number;
+  telegram_created_at?: string | null;
+  data_center?: string | null;
+  device_model?: string | null;
   age_label?: string | null;
   last_used_label?: string | null;
   notes?: string | null;
@@ -507,6 +517,24 @@ export type AccountPool = {
   created_at: string;
   updated_at: string;
   accounts?: AccountRecord[];
+};
+
+export type AccountSettings = {
+  account_id: number;
+  gather_limit: number;
+  add_limit: number;
+  dm_limit: number;
+  delay_min: number;
+  delay_max: number;
+  priority: string;
+  allow_gather: boolean;
+  allow_add: boolean;
+  allow_dm: boolean;
+  allow_campaign: boolean;
+  allow_rotation: boolean;
+  limit_work_hours: boolean;
+  work_hours_from: string;
+  work_hours_to: string;
 };
 
 // ---------- Groups ----------

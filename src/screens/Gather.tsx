@@ -112,67 +112,6 @@ function SRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-/* shared running screen */
-function GatherRunning({ onDone, onBack }: { onDone: () => void; onBack: () => void }) {
-  const { push } = useNav();
-  const { show, node } = useToast();
-  const [progress, setProgress] = useState(0);
-  const [running, setRunning]   = useState(true);
-  const [paused, setPaused]     = useState(false);
-  const [done, setDone]         = useState(false);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      setProgress((p) => {
-        if (p >= 100) { clearInterval(t); setRunning(false); setDone(true); return 100; }
-        return p + 4;
-      });
-    }, 100);
-    return () => clearInterval(t);
-  }, []);
-
-  return (
-    <div className="space-y-4">
-      {(running || done) && (
-        <div className="card p-5 space-y-3">
-          <Progress value={progress} label={done ? "✅ اكتمل التجميع!" : "📥 جاري التجميع..."} sub={`${progress}% [${Math.floor(progress*153)}/15340]`} tone="accent" />
-          {running && (
-            <div className="grid grid-cols-3 gap-2 text-center text-xs text-surface-500">
-              <div>+966501234567</div><div>السرعة: 12/ث</div><div>متبقي: ~4د</div>
-            </div>
-          )}
-          {running && (
-            <div className="text-xs text-surface-400">
-              آخر مُستخرج: أحمد @ahmed | متخطى: 12 (بوت)
-            </div>
-          )}
-          {done && (
-            <Alert tone="success" title="✅ اكتمل! مستخرج: 15,340 | متخطى: 210 | وقت: 4د">
-              <div className="mt-1 text-xs">تفاصيل المتخطى: بوت:180 | محذوف:20 | فلتر:10</div>
-            </Alert>
-          )}
-          <div className="flex flex-wrap gap-2">
-            {running && !paused && <Button variant="warn" className="flex-1" icon={<Pause className="h-4 w-4" />} onClick={() => setPaused(true)}>⏸️ إيقاف مؤقت</Button>}
-            {running && paused  && <Button variant="primary" className="flex-1" icon={<Play className="h-4 w-4" />} onClick={() => setPaused(false)}>▶️ استئناف</Button>}
-            {running && <Button variant="danger" icon={<Square className="h-4 w-4" />} onClick={() => { setRunning(false); setDone(true); setProgress(100); }}>⏹️ إيقاف وحفظ</Button>}
-            {done && (
-              <>
-                <Button icon={<FileText className="h-4 w-4" />} onClick={() => show("تم إرسال CSV")}>📂 فتح الملف</Button>
-                <Button variant="primary" icon={<ArrowRight className="h-4 w-4" />} onClick={() => push(["add"])}>📤 أداة الإضافة</Button>
-                <Button icon={<GitMerge className="h-4 w-4" />} onClick={() => push(["gather","merge"])}>🔀 دمج مع ملف</Button>
-                <Button icon={<Trash2 className="h-4 w-4" />} onClick={() => push(["gather","cleaner"])}>🧹 تنقية الملف</Button>
-                <Button icon={<BarChart3 className="h-4 w-4" />} onClick={() => show("إحصائيات")}>📊 إحصائيات</Button>
-                <Button onClick={onBack}>🔙 رجوع</Button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-      {node}
-    </div>
-  );
-}
-
 /* ── PublicGather ── */
 function PublicGather() {
   const { push } = useNav();
@@ -412,40 +351,79 @@ function PublicGather() {
 /* ── PrivateGather ── */
 function PrivateGather() {
   const { push } = useNav();
-  const [link, setLink]   = useState("t.me/+abc123");
-  const [joining, setJoining] = useState(false);
-  const [joined, setJoined]   = useState(false);
+  const { show, node } = useToast();
+  const [link, setLink] = useState("");
   const [autoLeave, setAutoLeave] = useState(true);
-  const [multiAcc, setMultiAcc]   = useState(false);
+  const [multiAcc, setMultiAcc] = useState(false);
+  const [accountRows, setAccountRows] = useState<AccountRecord[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<any>(null);
+
+  useEffect(() => {
+    apiFetch<AccountRecord[]>("/accounts")
+      .then((rows) => setAccountRows(rows.filter((r) => !!r.session_file_path)))
+      .catch(() => setAccountRows([]));
+  }, []);
+
+  const startJoin = async () => {
+    if (!link.trim()) { show("أدخل رابط الدعوة", "danger"); return; }
+    setRunning(true);
+    setResult(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/gather/join-private", {
+        method: "POST",
+        body: JSON.stringify({
+          link: link.trim(),
+          account_ids: selectedAccountId ? [selectedAccountId] : [],
+          auto_leave: autoLeave,
+        }),
+      });
+      setJobId(response.job_id || null);
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء الانضمام", "danger");
+    }
+  };
 
   return (
     <div className="animate-fade">
-      <PageHeader title="من رابط دعوة خاص" icon={<Link2 className="h-5 w-5" />} />
+      <PageHeader title="من رابط دعوة خاص" subtitle="انضمام حقيقي + تجميع عبر Telethon" icon={<Link2 className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
-        <InlineEdit label="رابط الدعوة" value={link} onSave={setLink} placeholder="t.me/+abc أو joinchat" />
-        {!joining && !joined && (
-          <Alert tone="info" title="🔍 التحقق من الرابط...">
-            <div className="mt-1 text-xs">✅ رابط صالح — مجموعة خاصة</div>
+        <Field label="رابط الدعوة" value={link} onChange={setLink} placeholder="t.me/+abc أو joinchat/..." />
+        <SectionTitle>الحساب المستخدم للانضمام</SectionTitle>
+        <OptionButton label="⭐ اختيار تلقائي" selected={!selectedAccountId} onClick={() => setSelectedAccountId(null)} />
+        {accountRows.map((a) => (
+          <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} selected={selectedAccountId === a.id} onClick={() => setSelectedAccountId(a.id)} />
+        ))}
+        {accountRows.length === 0 && <Alert tone="warn" title="لا توجد حسابات بجلسات">أضف حساباً أولاً من مدير الحسابات.</Alert>}
+        <Checkbox label="المغادرة تلقائياً بعد التجميع" checked={autoLeave} onChange={setAutoLeave} />
+        <Button variant="primary" className="w-full" disabled={running || !link.trim()} onClick={() => void startJoin()}>
+          {running ? "جاري الانضمام + التجميع..." : "⏳ الانضمام ثم التجميع"}
+        </Button>
+        <JobProgressCard jobId={jobId} onDone={(run) => {
+          setRunning(false);
+          if (run.status === "failed") { show(run.error?.split("\n")[0] || "فشل الانضمام", "danger"); return; }
+          try {
+            const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+            if (parsed) {
+              setResult(parsed);
+              show(`✅ تم الانضمام والتجميع: ${parsed.member_count.toLocaleString()} عضو`);
+            }
+          } catch { /* ignore */ }
+        }} />
+        {result && (
+          <Alert tone="success" title={`✅ تم: ${result.member_count.toLocaleString()} عضو`}>
+            <div className="mt-1 text-xs">الملف: {result.file_name} — التنفيذ: {result.execution_mode}</div>
+            <div className="mt-2 flex gap-2">
+              <Button onClick={async () => { try { await downloadApiFile(`/gather/exports/${result.export_id}/download`, result.file_name); } catch { show("تعذر التنزيل", "danger"); } }}>📂 تنزيل CSV</Button>
+              <Button variant="primary" onClick={() => push(["add"])}>📤 إضافة الأعضاء</Button>
+            </div>
           </Alert>
         )}
-        <SectionTitle>الحساب المستخدم للانضمام</SectionTitle>
-        <OptionButton label="👤 حساب واحد"             selected={!multiAcc} onClick={() => setMultiAcc(false)} />
-        <OptionButton label="👥 عدة حسابات (لتجميع أعمق)" selected={multiAcc}  onClick={() => setMultiAcc(true)} />
-        <Checkbox label="الانضمام تلقائياً قبل التجميع"   checked={true}      onChange={()=>{}} />
-        <Checkbox label="المغادرة تلقائياً بعد التجميع"   checked={autoLeave} onChange={setAutoLeave} />
-        {!joining && !joined && (
-          <Button variant="primary" className="w-full" onClick={() => { setJoining(true); setTimeout(()=>{ setJoining(false); setJoined(true); },1500); }}>
-            ⏳ الانضمام ثم التجميع
-          </Button>
-        )}
-        {joining && <Progress value={50} label="⏳ جاري الانضمام..." sub="50%" tone="accent" />}
-        {joined && (
-          <div className="space-y-3">
-            <Alert tone="success" title="✅ تم الانضمام | الأعضاء: 8,240" />
-            <Button variant="primary" className="w-full" onClick={() => push(["gather","public"])}>متابعة للتجميع</Button>
-          </div>
-        )}
       </div>
+      {node}
     </div>
   );
 }
@@ -453,43 +431,86 @@ function PrivateGather() {
 /* ── ChatGather ── */
 function ChatGather() {
   const { push } = useNav();
+  const { show, node } = useToast();
+  const [link, setLink] = useState("");
   const [range, setRange] = useState<"100"|"500"|"1000"|"5000"|"10000"|"all"|"custom">("500");
-  const [fromDate, setFromDate] = useState("2026-06-01");
-  const [toDate, setToDate]     = useState("2026-07-01");
-  const [minMsgs, setMinMsgs]   = useState("1");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [minMsgs, setMinMsgs] = useState("1");
   const [filters, setFilters] = useState({ text:true, media:false, files:false, reactions:false, replies:false, dedup:true, sort:false });
+  const [accountRows, setAccountRows] = useState<AccountRecord[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<GatherExtractResult | null>(null);
+
+  useEffect(() => {
+    apiFetch<AccountRecord[]>("/accounts")
+      .then((rows) => setAccountRows(rows.filter((r) => !!r.session_file_path)))
+      .catch(() => setAccountRows([]));
+  }, []);
+
+  const selectedLimit = range === "custom" ? 5000 : range === "all" ? 50000 : Number(range);
+
+  const startChatGather = async () => {
+    if (!link.trim()) { show("أدخل رابط المجموعة", "danger"); return; }
+    setRunning(true);
+    setResult(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/gather/extract", {
+        method: "POST",
+        body: JSON.stringify({
+          source_label: link.trim(),
+          source_type: "chat",
+          extract_mode: "active",
+          limit: selectedLimit,
+          account_id: selectedAccountId,
+        }),
+      });
+      setJobId(response.job_id || null);
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء التجميع", "danger");
+    }
+  };
 
   return (
     <div className="animate-fade">
-      <PageHeader title="تجميع المشاركين في الدردشة" icon={<MessageSquare className="h-5 w-5" />} />
+      <PageHeader title="تجميع المشاركين في الدردشة" subtitle="تنفيذ حقيقي عبر iter_participants" icon={<MessageSquare className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
-        <Field label="رابط المجموعة" placeholder="@group" />
-        <Alert tone="info" title="🔍 جلب المعلومات... — @group | 15,340 عضو" />
-        <SectionTitle>نطاق فحص الرسائل</SectionTitle>
+        <Field label="رابط المجموعة" placeholder="@group" value={link} onChange={setLink} />
+        <SectionTitle>نطاق فحص الأعضاء</SectionTitle>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {[["100","آخر 100"],["500","آخر 500"],["1000","آخر 1000"],["5000","آخر 5000"],["10000","آخر 10,000"],["all","جميع الرسائل"],["custom","نطاق مخصص"]] .map(([id,label]) => (
+          {[["100","آخر 100"],["500","آخر 500"],["1000","آخر 1000"],["5000","آخر 5000"],["10000","آخر 10,000"],["all","جميع الأعضاء"]].map(([id,label]) => (
             <OptionButton key={id} label={label} selected={range===id} onClick={() => setRange(id as typeof range)} />
           ))}
         </div>
-        {range==="custom" && (
-          <div className="flex gap-2">
-            <Field label="من" placeholder="YYYY-MM-DD" value={fromDate} onChange={setFromDate} />
-            <Field label="إلى" placeholder="YYYY-MM-DD" value={toDate} onChange={setToDate} />
-          </div>
+        <SectionTitle>حساب التجميع</SectionTitle>
+        <OptionButton label="⭐ اختيار تلقائي" selected={!selectedAccountId} onClick={() => setSelectedAccountId(null)} />
+        {accountRows.map((a) => (
+          <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} selected={selectedAccountId === a.id} onClick={() => setSelectedAccountId(a.id)} />
+        ))}
+        <Button variant="primary" className="w-full" disabled={running || !link.trim()} onClick={() => void startChatGather()}>
+          {running ? "جاري التجميع..." : "✅ بدء التجميع"}
+        </Button>
+        <JobProgressCard jobId={jobId} onDone={(run) => {
+          setRunning(false);
+          if (run.status === "failed") { show(run.error?.split("\n")[0] || "فشل التجميع", "danger"); return; }
+          try {
+            const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+            if (parsed?.export_id) { setResult(parsed as GatherExtractResult); show(`✅ ${parsed.member_count.toLocaleString()} عضو`); }
+          } catch { /* ignore */ }
+        }} />
+        {result && (
+          <Alert tone="success" title={`اكتمل: ${result.member_count.toLocaleString()} عضو`}>
+            <div className="mt-2 flex gap-2">
+              <Button onClick={async () => { try { await downloadApiFile(`/gather/exports/${result.export_id}/download`, result.file_name); } catch { show("تعذر التنزيل", "danger"); } }}>📂 تنزيل</Button>
+              <Button variant="primary" onClick={() => push(["add"])}>📤 إضافة</Button>
+            </div>
+          </Alert>
         )}
-        <SectionTitle>فلاتر المشاركة</SectionTitle>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <Checkbox label="مرسلو الرسائل النصية"    checked={filters.text}      onChange={(v)=>setFilters({...filters,text:v})} />
-          <Checkbox label="مرسلو الصور/الفيديو"     checked={filters.media}     onChange={(v)=>setFilters({...filters,media:v})} />
-          <Checkbox label="مرسلو الملفات"            checked={filters.files}     onChange={(v)=>setFilters({...filters,files:v})} />
-          <Checkbox label="من تفاعلوا (ريأكشن)"     checked={filters.reactions} onChange={(v)=>setFilters({...filters,reactions:v})} />
-          <Checkbox label="من ردوا على رسائل"        checked={filters.replies}   onChange={(v)=>setFilters({...filters,replies:v})} />
-          <Checkbox label="إزالة المكرر"             checked={filters.dedup}     onChange={(v)=>setFilters({...filters,dedup:v})} />
-          <Checkbox label="ترتيب حسب عدد الرسائل"   checked={filters.sort}      onChange={(v)=>setFilters({...filters,sort:v})} />
-        </div>
-        <InlineEdit label="حد أدنى لعدد الرسائل لكل مستخدم" value={minMsgs} onSave={setMinMsgs} placeholder="1" />
-        <Button variant="primary" className="w-full" onClick={() => push(["gather","public"])}>✅ بدء التجميع</Button>
       </div>
+      {node}
     </div>
   );
 }
@@ -497,16 +518,74 @@ function ChatGather() {
 /* ── VisibleGather ── */
 function VisibleGather() {
   const { push } = useNav();
+  const { show, node } = useToast();
+  const [link, setLink] = useState("");
+  const [accountRows, setAccountRows] = useState<AccountRecord[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<GatherExtractResult | null>(null);
+
+  useEffect(() => {
+    apiFetch<AccountRecord[]>("/accounts")
+      .then((rows) => setAccountRows(rows.filter((r) => !!r.session_file_path)))
+      .catch(() => setAccountRows([]));
+  }, []);
+
+  const startGather = async () => {
+    if (!link.trim()) { show("أدخل رابط المجموعة", "danger"); return; }
+    setRunning(true);
+    setResult(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/gather/extract", {
+        method: "POST",
+        body: JSON.stringify({
+          source_label: link.trim(),
+          source_type: "public",
+          extract_mode: "all",
+          limit: 10000,
+          account_id: selectedAccountId,
+        }),
+      });
+      setJobId(response.job_id || null);
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء التجميع", "danger");
+    }
+  };
+
   return (
     <div className="animate-fade">
-      <PageHeader title="من مجموعة ذات أعضاء ظاهرين" icon={<Eye className="h-5 w-5" />} />
+      <PageHeader title="من مجموعة ذات أعضاء ظاهرين" subtitle="تجميع حقيقي عبر iter_participants" icon={<Eye className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
-        <Field label="رابط المجموعة" placeholder="@group" />
-        <Alert tone="info" title="🔍 التحقق من ظهور الأعضاء...">
-          <div className="mt-1 text-xs">✅ الأعضاء ظاهرون</div>
-        </Alert>
-        <Button variant="primary" className="w-full" onClick={() => push(["gather","public"])}>متابعة للتجميع</Button>
+        <Field label="رابط المجموعة" placeholder="@group" value={link} onChange={setLink} />
+        <Alert tone="info" title="سيتم التحقق من ظهور الأعضاء تلقائياً أثناء التجميع">إذا كانت المجموعة تسمح بعرض الأعضاء، سيُجمعوا جميعاً.</Alert>
+        <SectionTitle>حساب التجميع</SectionTitle>
+        <OptionButton label="⭐ اختيار تلقائي" selected={!selectedAccountId} onClick={() => setSelectedAccountId(null)} />
+        {accountRows.map((a) => (
+          <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} selected={selectedAccountId === a.id} onClick={() => setSelectedAccountId(a.id)} />
+        ))}
+        <Button variant="primary" className="w-full" disabled={running || !link.trim()} onClick={() => void startGather()}>
+          {running ? "جاري التجميع..." : "✅ بدء التجميع"}
+        </Button>
+        <JobProgressCard jobId={jobId} onDone={(run) => {
+          setRunning(false);
+          if (run.status === "failed") { show(run.error?.split("\n")[0] || "فشل التجميع", "danger"); return; }
+          try {
+            const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+            if (parsed?.export_id) { setResult(parsed as GatherExtractResult); show(`✅ ${parsed.member_count.toLocaleString()} عضو`); }
+          } catch { /* ignore */ }
+        }} />
+        {result && (
+          <Alert tone="success" title={`اكتمل: ${result.member_count.toLocaleString()} عضو`}>
+            <div className="mt-2 flex gap-2">
+              <Button onClick={async () => { try { await downloadApiFile(`/gather/exports/${result.export_id}/download`, result.file_name); } catch { show("تعذر التنزيل", "danger"); } }}>📂 تنزيل</Button>
+              <Button variant="primary" onClick={() => push(["add"])}>📤 إضافة</Button>
+            </div>
+          </Alert>
+        )}
       </div>
+      {node}
     </div>
   );
 }
@@ -605,49 +684,108 @@ function PostGather() {
 /* ── BulkGather ── */
 function BulkGather() {
   const { push } = useNav();
-  const [mode, setMode]   = useState<"manual"|"file">("manual");
+  const { show, node } = useToast();
   const [links, setLinks] = useState("");
-  const [filePath, setFilePath] = useState("/path/to/links.txt");
-  const [sortOrder, setSortOrder] = useState<"seq"|"random"|"size">("seq");
-  const [mergeAll, setMergeAll]   = useState(true);
-  const [dedup, setDedup]         = useState(true);
-  const [saveSep, setSaveSep]     = useState(false);
-  const [started, setStarted]     = useState(false);
-  const [checked, setChecked]     = useState(false);
+  const [dedup, setDedup] = useState(true);
+  const [mergeAll, setMergeAll] = useState(true);
+  const [accountRows, setAccountRows] = useState<AccountRecord[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
+  const [running, setRunning] = useState(false);
+  const [currentLink, setCurrentLink] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [results, setResults] = useState<Array<{link:string;status:string;count?:number;error?:string}>>([]);
 
-  if (started) return <GatherRunning onDone={()=>setStarted(false)} onBack={()=>setStarted(false)} />;
+  useEffect(() => {
+    apiFetch<AccountRecord[]>("/accounts")
+      .then((rows) => setAccountRows(rows.filter((r) => !!r.session_file_path)))
+      .catch(() => setAccountRows([]));
+  }, []);
+
+  const linkList = links.split("\n").map(l => l.trim()).filter(Boolean);
+
+  const startBulk = async () => {
+    if (linkList.length === 0) { show("أدخل رابطاً واحداً على الأقل", "danger"); return; }
+    setRunning(true);
+    setResults([]);
+    const allResults: typeof results = [];
+    for (let i = 0; i < linkList.length; i++) {
+      setCurrentLink(linkList[i]);
+      setProgress(Math.round(((i) / linkList.length) * 100));
+      try {
+        const response = await apiFetch<any>("/gather/extract", {
+          method: "POST",
+          body: JSON.stringify({
+            source_label: linkList[i],
+            source_type: "public",
+            extract_mode: "all",
+            limit: 10000,
+            account_id: selectedAccountId,
+          }),
+        });
+        if (response.job_id) {
+          // Wait for job completion
+          let done = false;
+          while (!done) {
+            await new Promise(r => setTimeout(r, 2000));
+            try {
+              const status = await apiFetch<any>(`/gather/jobs/${response.job_id}`);
+              if (status.status === "done") {
+                const parsed = status.result;
+                allResults.push({ link: linkList[i], status: "✅", count: parsed?.member_count || 0 });
+                done = true;
+              } else if (status.status === "failed") {
+                allResults.push({ link: linkList[i], status: "❌", error: status.error?.split("\n")[0] });
+                done = true;
+              }
+            } catch { done = true; }
+          }
+        } else if (response.result) {
+          allResults.push({ link: linkList[i], status: "✅", count: response.result.member_count || 0 });
+        }
+      } catch (err) {
+        allResults.push({ link: linkList[i], status: "❌", error: err instanceof Error ? err.message : "فشل" });
+      }
+      setResults([...allResults]);
+    }
+    setProgress(100);
+    setRunning(false);
+    setCurrentLink("");
+    const successCount = allResults.filter(r => r.status === "✅").length;
+    show(`اكتمل: ${successCount}/${linkList.length} مجموعة`);
+  };
 
   return (
     <div className="animate-fade">
-      <PageHeader title="استخراج جماعي (متعدد)" icon={<Layers className="h-5 w-5" />} />
+      <PageHeader title="استخراج جماعي (متعدد)" subtitle="تجميع حقيقي من عدة مجموعات" icon={<Layers className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
-        <div className="grid grid-cols-2 gap-2">
-          <OptionButton label="✍️ إدخال يدوي"        selected={mode==="manual"} onClick={() => setMode("manual")} />
-          <OptionButton label="📄 من ملف نصي"         selected={mode==="file"}   onClick={() => setMode("file")} />
-        </div>
-        {mode==="manual"
-          ? <Field label="روابط (واحد per سطر)" placeholder={"@group1\n@group2\nt.me/+abc"} value={links} onChange={setLinks} />
-          : <InlineEdit label="مسار الملف" value={filePath} onSave={setFilePath} placeholder="/path/to/links.txt" />}
-        {!checked && (
-          <Button className="w-full" onClick={() => setChecked(true)}>🔍 التحقق من جميع الروابط</Button>
+        <Field label="روابط المجموعات (واحد per سطر)" placeholder={"@group1\n@group2\nt.me/group3"} value={links} onChange={setLinks} />
+        {linkList.length > 0 && <Alert tone="info" title={`${linkList.length} رابط مُدخل`} />}
+        <SectionTitle>حساب التجميع</SectionTitle>
+        <OptionButton label="⭐ اختيار تلقائي" selected={!selectedAccountId} onClick={() => setSelectedAccountId(null)} />
+        {accountRows.slice(0, 5).map((a) => (
+          <OptionButton key={a.id} label={a.phone} selected={selectedAccountId === a.id} onClick={() => setSelectedAccountId(a.id)} />
+        ))}
+        <Checkbox label="إزالة المكرر عبر المجموعات" checked={dedup} onChange={setDedup} />
+        <Button variant="primary" className="w-full" disabled={running || linkList.length === 0} onClick={() => void startBulk()}>
+          {running ? `جاري التجميع (${results.length}/${linkList.length})...` : "✅ بدء التجميع الجماعي"}
+        </Button>
+        {running && (
+          <div className="space-y-2">
+            <Progress value={progress} label={currentLink} sub={`${results.length}/${linkList.length}`} tone="accent" />
+          </div>
         )}
-        {checked && (
-          <Alert tone="info" title="ملخص: 3 عام | 1 خاص | 0 دعوة">
-            <div className="mt-1 text-xs">✅صالح: 3 | ❌منتهي: 0 | ⚠️خاص: 1</div>
-          </Alert>
+        {results.length > 0 && (
+          <div className="space-y-2">
+            <Table columns={["الرابط", "الحالة", "الأعضاء"]} rows={results.map(r => [
+              r.link, r.status, r.count ? r.count.toLocaleString() : r.error || "—"
+            ])} />
+            {results.some(r => r.status === "✅") && (
+              <Button variant="primary" onClick={() => push(["gather", "merge"])}>🔀 دمج النتائج</Button>
+            )}
+          </div>
         )}
-        <SectionTitle>إعدادات التجميع الجماعي</SectionTitle>
-        <Checkbox label="دمج النتائج في ملف واحد"         checked={mergeAll} onChange={setMergeAll} />
-        <Checkbox label="إزالة المكرر عبر المجموعات"       checked={dedup}    onChange={setDedup} />
-        <Checkbox label="حفظ كل مجموعة منفصلة"            checked={saveSep}  onChange={setSaveSep} />
-        <SectionTitle>ترتيب التجميع</SectionTitle>
-        <div className="grid grid-cols-3 gap-2">
-          <OptionButton label="🔢 بالترتيب"  selected={sortOrder==="seq"}    onClick={() => setSortOrder("seq")} />
-          <OptionButton label="🎲 عشوائي"    selected={sortOrder==="random"} onClick={() => setSortOrder("random")} />
-          <OptionButton label="📊 الأكبر أولاً" selected={sortOrder==="size"} onClick={() => setSortOrder("size")} />
-        </div>
-        <Button variant="primary" className="w-full" icon={<Play className="h-4 w-4" />} onClick={() => setStarted(true)}>✅ بدء التجميع الجماعي</Button>
       </div>
+      {node}
     </div>
   );
 }
@@ -655,46 +793,80 @@ function BulkGather() {
 /* ── AdvancedScrape ── */
 function AdvancedScrape() {
   const { push } = useNav();
-  const [query, setQuery]   = useState("");
+  const { show, node } = useToast();
+  const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
-  const [results, setResults]     = useState(false);
-  const [selected, setSelected]   = useState<number[]>([]);
+  const [results, setResults] = useState<Array<{name:string;type:string;members:string;description:string;link:string}>>([]);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [accountRows, setAccountRows] = useState<AccountRecord[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
 
-  const mockResults = [
-    { name:"@market_sa",    type:"مجموعة عامة", members:"15,340", desc:"سوق السعودية"  },
-    { name:"@trade_ksa",    type:"قناة",         members:"28,400", desc:"تداول وأسهم"    },
-    { name:"@offers_daily", type:"مجموعة عامة", members:"9,971",  desc:"عروض يومية"     },
-  ];
+  useEffect(() => {
+    apiFetch<AccountRecord[]>("/accounts")
+      .then((rows) => setAccountRows(rows.filter((r) => !!r.session_file_path)))
+      .catch(() => setAccountRows([]));
+  }, []);
+
+  const doSearch = async () => {
+    if (!query.trim()) return;
+    setSearching(true);
+    setResults([]);
+    setSelected([]);
+    try {
+      const data = await apiFetch<{ results: typeof results; count: number }>("/gather/search-telegram", {
+        method: "POST",
+        body: JSON.stringify({ query: query.trim(), account_id: selectedAccountId }),
+      });
+      setResults(data.results || []);
+      if ((data.results || []).length === 0) show("لم يتم العثور على نتائج", "info");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "فشل البحث", "danger");
+    } finally {
+      setSearching(false);
+    }
+  };
 
   return (
     <div className="animate-fade">
-      <PageHeader title="بحث متقدم (Advanced Scrape)" icon={<Search className="h-5 w-5" />} />
+      <PageHeader title="بحث متقدم (Advanced Scrape)" subtitle="بحث حقيقي عبر Telethon Contacts.Search" icon={<Search className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
         <Field label="كلمة بحث أو هاشتاق" placeholder="#سوق أو تجارة" value={query} onChange={setQuery} />
-        {!searching && !results && (
-          <Button variant="primary" className="w-full" disabled={!query}
-            onClick={() => { setSearching(true); setTimeout(()=>{ setSearching(false); setResults(true); },1800); }}>
-            🔍 البحث في تيليجرام
-          </Button>
+        {accountRows.length > 0 && (
+          <div className="space-y-1">
+            <span className="text-xs text-surface-500">حساب البحث:</span>
+            <OptionButton label="⭐ تلقائي" selected={!selectedAccountId} onClick={() => setSelectedAccountId(null)} />
+            {accountRows.slice(0, 3).map((a) => (
+              <OptionButton key={a.id} label={a.phone} selected={selectedAccountId === a.id} onClick={() => setSelectedAccountId(a.id)} />
+            ))}
+          </div>
         )}
-        {searching && <Progress value={60} label="🔍 البحث في تيليجرام..." sub="60%" tone="accent" />}
-        {results && (
+        <Button variant="primary" className="w-full" disabled={!query.trim() || searching} onClick={() => void doSearch()}>
+          {searching ? "جاري البحث..." : "🔍 البحث في تيليجرام"}
+        </Button>
+        {searching && <Progress value={60} label="🔍 البحث في تيليجرام..." sub="جاري الاتصال..." tone="accent" />}
+        {results.length > 0 && (
           <div className="space-y-3">
-            <Alert tone="success" title={`${mockResults.length} نتائج — مجموعات وقنوات`} />
+            <Alert tone="success" title={`${results.length} نتيجة — مجموعات وقنوات`} />
             <div className="flex gap-2">
-              <Button onClick={() => setSelected(mockResults.map((_,i)=>i))}>☑️ تحديد الكل</Button>
+              <Button onClick={() => setSelected(results.map((_, i) => i))}>☑️ تحديد الكل</Button>
               <Button onClick={() => setSelected([])}>⬜ إلغاء الكل</Button>
             </div>
-            <Table columns={["","اسم","نوع","أعضاء","وصف"]} rows={mockResults.map((r,i) => [
-              <input type="checkbox" checked={selected.includes(i)} onChange={()=>setSelected(s=>s.includes(i)?s.filter(x=>x!==i):[...s,i])} className="h-4 w-4 accent-brand-600" />,
-              r.name, r.type, r.members, r.desc,
+            <Table columns={["", "اسم", "نوع", "أعضاء", "وصف"]} rows={results.map((r, i) => [
+              <input type="checkbox" checked={selected.includes(i)} onChange={() => setSelected(s => s.includes(i) ? s.filter(x => x !== i) : [...s, i])} className="h-4 w-4 accent-brand-600" />,
+              r.name, r.type, r.members, r.description.slice(0, 60),
             ])} />
-            <Button variant="primary" className="w-full" disabled={selected.length===0} onClick={() => push(["gather","bulk"])}>
+            <Button variant="primary" className="w-full" disabled={selected.length === 0}
+              onClick={() => {
+                const links = selected.map(i => results[i]?.link || results[i]?.name).filter(Boolean);
+                show(`جاري تجميع ${links.length} مجموعة...`);
+                push(["gather", "bulk"]);
+              }}>
               ✅ تجميع من المحدد ({selected.length})
             </Button>
           </div>
         )}
       </div>
+      {node}
     </div>
   );
 }

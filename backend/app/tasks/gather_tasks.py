@@ -426,3 +426,161 @@ def gather_merge_job(export_ids: list[int], deduplicate: bool = True, actor_user
     except Exception as exc:
         jobrunner.finish_job(run_id, error=str(exc))
         raise
+
+
+# --------------------------------------------------------------------------
+# Join private group + extract
+# --------------------------------------------------------------------------
+
+def gather_join_private_run(run_id: str, payload: dict) -> dict:
+    """Join a private invite link, then extract members from the joined group."""
+    db = SessionLocal()
+    try:
+        link = (payload.get("link") or "").strip()
+        account_ids = payload.get("account_ids") or []
+        auto_leave = bool(payload.get("auto_leave", False))
+        actor_user_id = payload.get("actor_user_id")
+
+        if not link:
+            raise ValueError("أدخل رابط الدعوة")
+
+        api_id, api_hash = get_telegram_credentials(db)
+        accounts = []
+        if account_ids:
+            accounts = db.query(Account).filter(Account.id.in_(account_ids)).all()
+        if not accounts:
+            accounts = pick_accounts(db, "gather", count=1)
+        if not accounts:
+            raise ValueError("لا يوجد حساب متاح للانضمام")
+
+        account = accounts[0]
+        client = build_client_for_account(db, account, api_id, api_hash)
+
+        jobrunner.update_progress(run_id, 10, f"جاري الانضمام عبر {account.phone}...")
+
+        from app.services.telegram import parse_username
+        from telethon.tl.functions.messages import ImportChatInviteRequest
+
+        entity = None
+        async def _join_and_extract():
+            nonlocal entity
+            await client.connect()
+            try:
+                invite_hash = link.rstrip("/").split("/")[-1]
+                if invite_hash.startswith("+"):
+                    invite_hash = invite_hash[1:]
+                try:
+                    result = await client(ImportChatInviteRequest(invite_hash))
+                    entity = result.chats[0] if result.chats else None
+                except Exception:
+                    entity = await client.get_entity(parse_username(link))
+            finally:
+                pass
+
+        asyncio.run(_join_and_extract())
+        mark_used(db, account, "gather", 1)
+        jobrunner.update_progress(run_id, 30, "✅ تم الانضمام — جاري التجميع...")
+
+        rows = asyncio.run(_telethon_extract(client, link, "all", 10000, run_id))
+
+        try:
+            asyncio.run(client.disconnect())
+        except Exception:
+            pass
+
+        if not rows:
+            raise ValueError("لم يتم العثور على أعضاء بعد الانضمام")
+
+        safe_name = link.replace("t.me/", "").replace("@", "").replace("/", "_").replace("+", "inv_").replace(" ", "_") or "private"
+        file_name = f"gather_private_{safe_name}_{uuid4().hex[:8]}.csv"
+        file_path = _exports_dir() / file_name
+        _write_csv(file_path, rows)
+
+        export_row = GatherExport(
+            source_label=link, source_type="private", file_name=file_name, file_path=str(file_path),
+            member_count=len(rows), status="ready",
+            notes=f"joined_via={account.phone}; auto_leave={auto_leave}",
+            created_by=actor_user_id,
+        )
+        db.add(export_row)
+        db.commit()
+        db.refresh(export_row)
+
+        if auto_leave and entity:
+            try:
+                from telethon.tl.functions.channels import LeaveChannelRequest
+                async def _leave():
+                    await client.connect()
+                    try:
+                        await client(LeaveChannelRequest(entity))
+                    finally:
+                        await client.disconnect()
+                asyncio.run(_leave())
+            except Exception:
+                pass
+
+        write_audit_log(db, action="gather.join_private", message=f"انضمام + تجميع من {link}: {len(rows)} عضو", actor_user_id=actor_user_id, entity_type="gather_export", entity_id=str(export_row.id))
+        jobrunner.update_progress(run_id, 100, "اكتمل")
+        return {
+            "export_id": export_row.id, "file_name": file_name, "member_count": len(rows),
+            "source_label": link, "execution_mode": "telethon", "joined": True,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------------
+# Telegram search for groups/channels
+# --------------------------------------------------------------------------
+
+def telegram_search_run(run_id: str, payload: dict) -> dict:
+    """Search Telegram for groups/channels by keyword."""
+    db = SessionLocal()
+    try:
+        query = (payload.get("query") or "").strip()
+        account_id = payload.get("account_id")
+        actor_user_id = payload.get("actor_user_id")
+
+        if not query:
+            raise ValueError("أدخل كلمة بحث")
+
+        account = None
+        if account_id:
+            account = db.query(Account).filter(Account.id == account_id).first()
+        if not account:
+            account = _auto_pick_account(db, "gather")
+        if not account:
+            raise ValueError("لا يوجد حساب متاح للبحث")
+
+        api_id, api_hash = get_telegram_credentials(db)
+        client = build_client_for_account(db, account, api_id, api_hash)
+
+        results = []
+        async def _search():
+            await client.connect()
+            try:
+                from telethon.tl.functions.contacts import SearchRequest
+                result = await client(SearchRequest(q=query, limit=20))
+                for chat in (result.chats or []):
+                    results.append({
+                        "name": f"@{chat.username}" if getattr(chat, "username", None) else str(getattr(chat, "title", "?")),
+                        "type": "channel" if getattr(chat, "broadcast", False) else "group",
+                        "members": str(getattr(chat, "participants_count", 0) or "—"),
+                        "description": (getattr(chat, "about", None) or "")[:100],
+                        "link": f"https://t.me/{chat.username}" if getattr(chat, "username", None) else "",
+                    })
+            finally:
+                await client.disconnect()
+
+        asyncio.run(_search())
+        mark_used(db, account, "gather", 1)
+
+        return {
+            "query": query, "results": results, "count": len(results),
+            "account": account.phone,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    finally:
+        db.close()
+

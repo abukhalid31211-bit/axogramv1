@@ -160,13 +160,20 @@ function AddProxy() {
             variant="primary"
             className="flex-1"
             disabled={!address || checking}
-            onClick={() => {
+            onClick={async () => {
               setChecking(true);
-              setTimeout(() => {
-                const ok = address.includes(":");
-                setValid(ok);
+              setValid(null);
+              try {
+                const result = await apiFetch<{ valid: boolean; speed_ms?: number; error?: string }>("/proxies/validate", {
+                  method: "POST",
+                  body: JSON.stringify({ addresses: [address], proxy_type: proxyType }),
+                });
+                setValid(result.valid !== false);
+              } catch {
+                setValid(address.includes(":"));
+              } finally {
                 setChecking(false);
-              }, 800);
+              }
             }}
           >
             تحقق
@@ -185,46 +192,95 @@ function ImportProxy() {
   const { show, node } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [done, setDone] = useState(false);
+  const [text, setText] = useState("");
+  const [mode, setMode] = useState<"file" | "text">("text");
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState<{ imported: number; skipped: number; failed: number } | null>(null);
 
-  const upload = async () => {
-    if (!file) return;
-    setUploading(true);
+  const doImport = async () => {
+    setImporting(true);
+    setResult(null);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("category", "txt");
-      await apiFetch("/uploads", { method: "POST", body: form });
-      setDone(true);
-      show("تم رفع الملف إلى السيرفر");
+      const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+      if (lines.length === 0 && !file) { show("أدخل بروكسيات أو اختر ملفاً", "danger"); setImporting(false); return; }
+
+      let imported = 0, skipped = 0, failed = 0;
+      const proxyLines = lines;
+
+      for (const line of proxyLines) {
+        const parts = line.split(/[:\s]+/);
+        if (parts.length < 2) { failed++; continue; }
+        const ip = parts[0];
+        const port = parts[1];
+        const user = parts[2] || null;
+        const pass = parts[3] || null;
+        try {
+          await apiFetch("/proxies", {
+            method: "POST",
+            body: JSON.stringify({
+              address: `${ip}:${port}`,
+              proxy_type: "SOCKS5",
+              status: "active",
+              auth_login: user,
+              auth_password: pass,
+            }),
+          });
+          imported++;
+        } catch {
+          skipped++;
+        }
+      }
+      setResult({ imported, skipped, failed });
+      show(`✅ تم استيراد ${imported} بروكسي`);
     } catch (err) {
-      show(err instanceof Error ? err.message : "تعذر رفع الملف", "danger");
+      show(err instanceof Error ? err.message : "تعذر الاستيراد", "danger");
     } finally {
-      setUploading(false);
+      setImporting(false);
     }
   };
 
   return (
     <div className="animate-fade">
-      <PageHeader title="استيراد قائمة من .txt" icon={<FileText className="h-5 w-5" />} />
+      <PageHeader title="استيراد قائمة بروكسيهات" subtitle="من ملف أو لصق مباشر" icon={<FileText className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
-        <input ref={inputRef} type="file" accept=".txt" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-        <Alert tone="info" title="رفع ملف بروكسيات">يتم حفظ الملف في السيرفر الآن، ويمكن لاحقاً إضافة parsing تلقائي داخله.</Alert>
-        <Button variant="primary" className="w-full" icon={<UploadCloud className="h-4 w-4" />} onClick={() => inputRef.current?.click()}>
-          {file ? `تم اختيار: ${file.name}` : "اختيار ملف TXT"}
-        </Button>
-        {!uploading && !done && <Button className="w-full" disabled={!file} onClick={() => void upload()}>رفع الملف</Button>}
-        {uploading && <Progress value={75} label="جاري الرفع..." sub="75%" tone="accent" />}
-        {done && (
-          <div className="space-y-3">
-            <Alert tone="success" title="تم رفع الملف بنجاح">الخطوة القادمة: parsing وربط تلقائي بإضافة البروكسيات من الملف.</Alert>
-            <div className="flex gap-2">
-              <Button variant="primary" className="flex-1" onClick={() => push(["proxy", "list"])}>عرض البروكسيات</Button>
-              <Button onClick={() => push(["proxy"])}>رجوع</Button>
-            </div>
-          </div>
+        <div className="grid grid-cols-2 gap-2">
+          <OptionButton label="📋 لصق نص مباشر" selected={mode === "text"} onClick={() => setMode("text")} />
+          <OptionButton label="📄 من ملف .txt" selected={mode === "file"} onClick={() => setMode("file")} />
+        </div>
+        <Alert tone="info" title="الصيغ المدعومة">IP:PORT | IP:PORT:USER:PASS | TYPE:IP:PORT:USER:PASS (سطر لكل بروكسي)</Alert>
+        {mode === "text" ? (
+          <TextArea label="لصق قائمة البروكسيات" rows={8} value={text} onChange={setText} placeholder={"185.12.45.10:1080 / 77.40.22.8:1080:user:pass / 192.168.1.1:8080"} />
+        ) : (
+          <>
+            <input ref={inputRef} type="file" accept=".txt,.csv" className="hidden" onChange={async (e) => {
+              const f = e.target.files?.[0]; if (!f) return;
+              setFile(f);
+              const content = await f.text();
+              setText(content);
+              e.target.value = "";
+            }} />
+            <Button variant="primary" className="w-full" icon={<UploadCloud className="h-4 w-4" />} onClick={() => inputRef.current?.click()}>
+              {file ? `تم اختيار: ${file.name}` : "اختيار ملف TXT/CSV"}
+            </Button>
+            {text && <Alert tone="info" title={`تم تحميل ${text.split("\n").filter(l => l.trim()).length} سطر`}></Alert>}
+          </>
         )}
+        <Button variant="primary" className="w-full" disabled={importing || (!text.trim() && !file)} onClick={() => void doImport()}>
+          {importing ? "جاري الاستيراد..." : "✅ استيراد البروكسيات"}
+        </Button>
+        {result && (
+          <Alert tone="success" title="نتائج الاستيراد">
+            <div className="mt-1 flex gap-3 text-xs">
+              <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">✅ مستورد: {result.imported}</span>
+              <span className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">⏭ مكرر: {result.skipped}</span>
+              <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">❌ فاشل: {result.failed}</span>
+            </div>
+          </Alert>
+        )}
+        <div className="flex gap-2">
+          <Button variant="primary" className="flex-1" onClick={() => push(["proxy", "list"])}>عرض البروكسيات</Button>
+          <Button onClick={() => push(["proxy"])}>رجوع</Button>
+        </div>
       </div>
       {node}
     </div>
@@ -541,26 +597,34 @@ function ProxyDetail() {
 
   return (
     <div className="animate-fade">
-      <PageHeader title="بطاقة تفاصيل البروكسي" icon={<Eye className="h-5 w-5" />} />
+      <PageHeader title={`تفاصيل: ${row.address}`} icon={<Eye className="h-5 w-5" />} />
       <div className="mx-auto max-w-2xl card p-6 space-y-3">
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">IP:PORT</div><div className="font-bold text-surface-800">{row.address}</div></div>
           <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">النوع</div><div className="font-bold text-surface-800">{row.proxy_type}</div></div>
           <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">الحالة</div><StatusChip status={row.status} /></div>
-          <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">السرعة</div><div className="font-bold text-surface-800">{row.speed_ms ? `${row.speed_ms}ms` : "—"}</div></div>
-          <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">الحساب المرتبط</div><div className="font-bold text-surface-800">{linkedAccount ? linkedAccount.phone : "غير مرتبط"}</div></div>
-          <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">المجموعة</div><div className="font-bold text-surface-800">عام</div></div>
+          <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">السرعة</div><div className="font-bold text-surface-800">{row.speed_ms ? `${row.speed_ms}ms` : "لم يُختبر"}</div></div>
+          <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">الحساب المرتبط</div><div className="font-bold text-surface-800">{linkedAccount ? `${linkedAccount.name} (${linkedAccount.phone})` : "غير مرتبط"}</div></div>
+          <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">تاريخ الإضافة</div><div className="font-bold text-surface-800">{new Date(row.created_at).toLocaleDateString("ar-SA")}</div></div>
         </div>
-        {testing && <Progress value={60} label="جاري الاختبار..." sub="60%" tone="accent" />}
+        {testing && <Progress value={60} label="جاري اختبار الاتصال..." sub="فحص TCP/SOCKS..." tone="accent" />}
         {testResult && <Alert tone={testResult.startsWith("✅") ? "success" : "danger"} title={testResult} />}
         <div className="flex flex-wrap gap-2 pt-2">
-          <Button onClick={() => { setTesting(true); setTimeout(() => { setTesting(false); setTestResult("✅ يعمل | سرعة: 140ms"); }, 900); }}>🔍 اختبار الآن</Button>
-          <Button onClick={() => show("غير مصنف: يمكن تعيين تصنيف جديد")}>🏷️ تغيير التصنيف</Button>
+          <Button onClick={async () => {
+            setTesting(true); setTestResult(null);
+            try {
+              const r = await apiFetch<any>("/proxies/validate", { method: "POST", body: JSON.stringify({ proxy_ids: [row.id] }) });
+              if (r.summary) setTestResult(`✅ نشط: ${r.summary.active} | بطيء: ${r.summary.slow} | ميت: ${r.summary.dead}`);
+              else setTestResult("✅ تم الفحص — راجع الجدول للنتيجة");
+            } catch (err) {
+              setTestResult(`❌ فشل الاختبار: ${err instanceof Error ? err.message : "خطأ"}`);
+            } finally { setTesting(false); }
+          }}>🔍 اختبار الآن</Button>
           <Button variant="danger" onClick={() => setConfirmDel(true)}>❌ حذف هذا البروكسي</Button>
           <Button onClick={() => push(["proxy"])}>رجوع</Button>
         </div>
       </div>
-      <ConfirmDialog open={confirmDel} danger title="حذف البروكسي" message="سيتم حذف هذا البروكسي نهائياً." onConfirm={() => { setConfirmDel(false); show("تم حذف البروكسي"); push(["proxy", "list"]); }} onCancel={() => setConfirmDel(false)} />
+      <ConfirmDialog open={confirmDel} danger title="حذف البروكسي" message={`سيتم حذف ${row.address} نهائياً.`} onConfirm={async () => { try { await apiFetch(`/proxies/${row.id}`, { method: "DELETE" }); show("تم حذف البروكسي"); push(["proxy", "list"]); } catch (err) { show(err instanceof Error ? err.message : "تعذر الحذف", "danger"); } setConfirmDel(false); }} onCancel={() => setConfirmDel(false)} />
       {node}
     </div>
   );
@@ -675,15 +739,15 @@ function ProxyStats() {
   const { show, node } = useToast();
   const [data, setData] = useState<ProxyStats | null>(null);
   useEffect(() => { apiFetch<ProxyStats>("/proxies/stats").then(setData).catch(() => undefined); }, []);
-  const byType = data?.by_type ?? { SOCKS5: 6, SOCKS4: 3, HTTP: 3, MTPROTO: 2 };
+  const byType = data?.by_type ?? {};
   const stats = [
-    ["إجمالي البروكسيهات", String(data?.total ?? 14)],
-    ["نشط", String(data?.active ?? 9)],
-    ["ميت", String(data?.dead ?? 3)],
-    ["بطيء", String(data?.slow ?? 2)],
-    ["متوسط السرعة", `${data?.avg_speed_ms ?? 145}ms`],
-    ["أسرع بروكسي", `${data?.fastest ?? 98}ms`],
-    ["أبطأ بروكسي", `${data?.slowest ?? 410}ms`],
+    ["إجمالي البروكسيهات", String(data?.total ?? 0)],
+    ["نشط", String(data?.active ?? 0)],
+    ["ميت", String(data?.dead ?? 0)],
+    ["بطيء", String(data?.slow ?? 0)],
+    ["متوسط السرعة", data?.avg_speed_ms ? `${data.avg_speed_ms}ms` : "—"],
+    ["أسرع بروكسي", data?.fastest ? `${data.fastest}ms` : "—"],
+    ["أبطأ بروكسي", data?.slowest ? `${data.slowest}ms` : "—"],
   ];
   return (
     <div className="animate-fade">

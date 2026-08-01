@@ -398,7 +398,7 @@ function DatabaseSettings() {
           <StatCard label="الحجم" value="12 MB" tone="brand" />
           <StatCard label="السجلات" value="48,200" tone="warn" />
         </div>
-        {!checking && !checkOk && <Button variant="primary" onClick={() => { setChecking(true); setTimeout(() => { setChecking(false); setCheckOk(true); }, 1200); }}>🔍 فحص سلامة قاعدة البيانات</Button>}
+        {!checking && !checkOk && <Button variant="primary" onClick={async () => { setChecking(true); try { await apiFetch("/system/database/vacuum", { method: "POST" }); setCheckOk(true); show("✅ قاعدة البيانات سليمة"); } catch (err) { show(err instanceof Error ? err.message : "تعذر الفحص", "danger"); } finally { setChecking(false); } }}>🔍 فحص سلامة قاعدة البيانات</Button>}
         {checking && <Progress value={70} label="جاري الفحص..." sub="70%" tone="accent" />}
         {checkOk && <Alert tone="success" title="✅ قاعدة البيانات سليمة" />}
         <div className="flex flex-wrap gap-2">
