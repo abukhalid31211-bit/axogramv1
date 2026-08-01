@@ -552,7 +552,7 @@ function MonthlyReport() {
         <p className="mt-2 text-sm text-surface-600">مقارنة بالشهر السابق: <span className="font-bold text-brand-600">+{data?.compare_prev_month_pct ?? 12}%</span></p>
       </div>
       <div className="mt-4 flex gap-2">
-        <Button variant="primary" onClick={() => show("تم تصدير التقرير الشهري")}>📤 تصدير</Button>
+        <Button variant="primary" onClick={async () => { try { await downloadApiFile("/reports/export?period=month&format_value=pdf", "monthly-report.pdf"); show("تم تصدير التقرير"); } catch (err) { show(err instanceof Error ? err.message : "تعذر التصدير", "danger"); } }}>📤 تصدير</Button>
         <Button onClick={() => push(["reports"])}>رجوع</Button>
       </div>
       {node}
@@ -587,7 +587,7 @@ function AccountReports() {
   const accountsList = (rows.length ? rows : [
     { account_id:1, phone: "+966501234567", gather: 12400, add: 3100, dm: 400, success_rate: 91, flood_waits: 18 },
     { account_id:2, phone: "+966552345678", gather: 9800, add: 2400, dm: 300, success_rate: 84, flood_waits: 22 },
-    { account_id:3, phone: "+966563456789", gather: 15200, add: 3700, dm: 500, success_rate: 94, flood_waits: 9 },
+    { account_id:0, phone: "—", gather: 0, add: 0, dm: 0, success_rate: 0, flood_waits: 0 },
   ]);
   if (selected !== null) {
     const a = accountsList[selected];
@@ -608,7 +608,7 @@ function AccountReports() {
           </div>
         </div>
         <div className="mt-4 flex gap-2">
-          <Button onClick={() => show("تم تصدير تقرير الحساب")}>📤 تصدير</Button>
+          <Button onClick={async () => { try { await downloadApiFile("/reports/export?period=today&format_value=pdf", "account-report.pdf"); show("تم تصدير التقرير"); } catch (err) { show(err instanceof Error ? err.message : "تعذر التصدير", "danger"); } }}>📤 تصدير</Button>
           <Button onClick={() => setSelected(null)}>رجوع</Button>
         </div>
         {node}
@@ -658,7 +658,7 @@ function AdvancedAnalytics() {
             <span className="chip bg-accent-50 text-accent-700 ring-1 ring-accent-200">إضافة: {data?.avg_add_speed ?? 40} عضو/ساعة</span>
             <span className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">رسائل: {data?.avg_dm_speed ?? 25} رسالة/ساعة</span>
           </div>
-          <p className="mt-3 text-sm text-surface-600">أسرع حساب: +966563456789 (55 عملية/ساعة)</p>
+          <p className="mt-3 text-sm text-surface-600">أسرع حساب: {data?.fastest_account || "—"} ({data?.fastest_rate || 0} عملية/ساعة)</p>
         </div>
       )}
       {tab === "target" && (
@@ -671,7 +671,7 @@ function AdvancedAnalytics() {
         </div>
       )}
       <div className="mt-4">
-        <Button onClick={() => show("تم تصدير التحليل")}>📤 تصدير</Button>
+        <Button onClick={async () => { try { await downloadApiFile("/reports/export?period=week&format_value=pdf", "analytics-report.pdf"); show("تم تصدير التحليل"); } catch (err) { show(err instanceof Error ? err.message : "تعذر التصدير", "danger"); } }}>📤 تصدير</Button>
         <Button className="ms-2" onClick={() => push(["reports"])}>رجوع</Button>
       </div>
       {node}
@@ -689,7 +689,7 @@ function Leaderboard() {
   return (
     <div className="animate-fade">
       <PageHeader title="لوحة الترتيب" subtitle="ترتيب الحسابات حسب الأداء" icon={<Trophy className="h-5 w-5" />} />
-      <Table columns={["الترتيب","حساب","القيمة"]} rows={(rows.length ? rows : [{ rank:1, account_id:1, phone:"+966563456789", value:3700, metric:"add" }]).map((r) => [
+      <Table columns={["الترتيب","حساب","القيمة"]} rows={rows.map((r) => [
         medals[r.rank - 1] ?? `#${r.rank}`, r.phone, r.value.toLocaleString(),
       ])} />
       <div className="mt-4 flex gap-2">

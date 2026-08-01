@@ -175,7 +175,7 @@ function SmartLimits() {
           <Table columns={["حساب","عمر","صحة","حد موصى","تأخير"]} rows={[
             ["+966501234567","8 أشهر","90%",String(Math.round(preset.daily * 1.2)),preset.delay],
             ["+966552345678","3 أشهر","75%",String(preset.daily),preset.delay],
-            ["+966563456789","شهر","55%",String(Math.round(preset.daily * 0.5)),"180-300"],
+            ["—","شهر","—","—","180-300"],
           ]} />
         </div>
       </div>
