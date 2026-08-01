@@ -171,21 +171,32 @@ function RotationTable() {
 function EditOrder() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [order, setOrder] = useState("1,2,3,4,5");
+  const [rows, setRows] = useState<any[]>([]);
+  const [order, setOrder] = useState("");
+
+  useEffect(() => {
+    apiFetch<any[]>("/rotation/table").then((data) => {
+      setRows(data);
+      setOrder(data.map((a: any) => a.account_id).join(","));
+    }).catch(() => undefined);
+  }, []);
+
+  const currentOrder = rows.map((a: any) => `${a.phone} (${a.health}%)`).join(" → ");
+
   return (
     <div className="animate-fade">
       <PageHeader title="تعديل ترتيب الحسابات" icon={<Edit3 className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
         <SectionTitle>الترتيب الحالي</SectionTitle>
-        <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-2.5 text-sm font-mono text-surface-600">1 → 2 → 3 → 4 → 5</div>
-        <InlineEdit label="الترتيب الجديد (أرقام/فواصل)" value={order} onSave={setOrder} placeholder="مثال: 1,2,3,4,5" />
+        <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-2.5 text-sm font-mono text-surface-600 break-all">{currentOrder || "لا توجد حسابات"}</div>
+        <InlineEdit label="الترتيب الجديد (أرقام الحسابات/فواصل)" value={order} onSave={setOrder} placeholder="1,2,3,4,5" />
         <div className="space-y-2">
-          <OptionButton label="ترتيب تلقائي حسب الصحة (تنازلي)" selected={false} onClick={() => setOrder("3,1,5,2,4")} />
-          <OptionButton label="ترتيب حسب العمر (الأقدم أولاً)"   selected={false} onClick={() => setOrder("5,2,4,1,3")} />
-          <OptionButton label="ترتيب عشوائي"                     selected={false} onClick={() => setOrder("4,1,3,5,2")} />
+          <OptionButton label="ترتيب تلقائي حسب الصحة (تنازلي)" selected={false} onClick={() => setOrder([...rows].sort((a,b) => b.health - a.health).map((a:any) => a.account_id).join(","))} />
+          <OptionButton label="ترتيب حسب الاستهلاك (الأقل أولاً)" selected={false} onClick={() => setOrder([...rows].sort((a,b) => (a.gather+a.add+a.dm) - (b.gather+b.add+b.dm)).map((a:any) => a.account_id).join(","))} />
+          <OptionButton label="ترتيب عشوائي" selected={false} onClick={() => setOrder([...rows].sort(() => Math.random() - 0.5).map((a:any) => a.account_id).join(","))} />
         </div>
         <div className="flex gap-2">
-          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ switch_ops: parseInt(order.split(",")[0] || "5") }) }).then(() => show("تم حفظ الترتيب")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>حفظ الترتيب</Button>
+          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ account_order: order }) }).then(() => show("تم حفظ الترتيب")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>حفظ الترتيب</Button>
           <Button onClick={() => push(["rotation"])}>إلغاء</Button>
         </div>
       </div>
@@ -198,17 +209,18 @@ function DailyUsage() {
   const { push } = useNav();
   const [rows, setRows] = useState<any[]>([]);
   useEffect(() => { apiFetch<any[]>("/rotation/usage").then(setRows).catch(() => undefined); }, []);
+  const totalOps = rows.reduce((s, a) => s + (a.gather || 0) + (a.add || 0) + (a.dm || 0), 0);
   return (
     <div className="animate-fade">
-      <PageHeader title="الاستهلاك اليومي" icon={<BarChart3 className="h-5 w-5" />} />
+      <PageHeader title="الاستهلاك اليومي" subtitle="بيانات حقيقية من RotationUsage" icon={<BarChart3 className="h-5 w-5" />} />
       <Table columns={["حساب","تجميع","إضافة","رسائل","الحالة","المتبقي"]}
-        rows={(rows.length ? rows : []).map((a,i) => [a.phone,
-          <div key={i} className="min-w-[90px]"><Progress value={i === 1 ? 100 : 60} /></div>,
-          a.add, a.dm,
-          <StatusChip key={i} status={a.status === "active" ? "active" : "draft"} />, `${a.remaining ?? 500}`])} />
+        rows={rows.map((a) => [a.phone,
+          <div className="min-w-[90px]"><Progress value={Math.min(100, Math.round(((a.gather || 0) + (a.add || 0) + (a.dm || 0)) / Math.max(1, (a.remaining || 1) + (a.gather || 0) + (a.add || 0) + (a.dm || 0)) * 100))} /></div>,
+          String(a.add || 0), String(a.dm || 0),
+          <StatusChip status={a.status === "active" ? "active" : "blocked"} />, String(a.remaining ?? 0)])} />
       <div className="mt-3 flex items-center justify-between rounded-xl bg-surface-50 border border-surface-200 px-4 py-3 text-sm">
-        <span className="text-surface-500">إجمالي اليوم | تصفير تلقائي</span>
-        <span className="font-bold text-surface-800">600 عملية | 00:00</span>
+        <span className="text-surface-500">إجمالي اليوم: {totalOps} عملية | تصفير تلقائي: 00:00</span>
+        <Button onClick={() => push(["rotation", "reset"])}>🔄 تصفير الآن</Button>
       </div>
       <div className="mt-4"><Button onClick={() => push(["rotation"])}>رجوع</Button></div>
     </div>
@@ -280,7 +292,7 @@ function SmartRotation() {
         </div>
       </div>
       <div className="mt-4 flex gap-2">
-        <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ rest_after: parseInt(restCount || "10") }) }).then(() => show("تم حفظ إعدادات التدوير الذكي")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>حفظ الإعدادات الذكية</Button>
+        <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ rest_after: parseInt(restCount || "10"), delay_min: parseInt(dFrom || "30"), delay_max: parseInt(dTo || "90"), smart_no_repeat: rules.noRepeat, smart_rest: rules.restAfter, smart_random_delay: rules.randomDelay, smart_reduce_flood: rules.reduceFlood, smart_increase_delay: rules.increaseDelay, smart_stop_weak: rules.stopWeak, smart_prefer_member: rules.preferMember, smart_balanced: rules.balanced, smart_switch_slow: rules.switchSlow, timing_mode: timing }) }).then(() => show("تم حفظ إعدادات التدوير الذكي")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>حفظ الإعدادات الذكية</Button>
         <Button onClick={() => push(["rotation"])}>رجوع</Button>
       </div>
       {node}
@@ -309,14 +321,14 @@ function RotationSchedule() {
             <Field label="إلى الساعة" value={to} onChange={setTo} />
           </div>
           <Checkbox label="لا عمل بعد منتصف الليل" checked={noMidnight} onChange={() => setNoMidnight(!noMidnight)} />
-          <div className="mt-3"><Button variant="primary" onClick={() => show("تم حفظ ساعات العمل")}>حفظ</Button></div>
+          <div className="mt-3"><Button variant="primary" onClick={() => { apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ work_from: from, work_to: to }) }).then(() => show("تم حفظ ساعات العمل")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>حفظ</Button></div>
         </div>
         <div className="card p-5">
           <SectionTitle>📆 أيام العمل المسموحة</SectionTitle>
           <div className="space-y-2">
             {days.map((d, i) => <Checkbox key={d} label={d} checked={workDays[i]} onChange={() => setWorkDays(w => { const n=[...w]; n[i]=!n[i]; return n; })} />)}
           </div>
-          <div className="mt-3"><Button variant="primary" onClick={() => { show("تم حفظ أيام العمل"); push(["rotation"]); }}>حفظ</Button></div>
+          <div className="mt-3"><Button variant="primary" onClick={() => { const enabled = days.filter((_, i) => workDays[i]); apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ work_days: enabled }) }).then(() => { show("تم حفظ أيام العمل"); push(["rotation"]); }).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>حفظ</Button></div>
         </div>
       </div>
       <div className="mt-4"><Button onClick={() => push(["rotation"])}>رجوع</Button></div>
