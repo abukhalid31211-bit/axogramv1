@@ -132,6 +132,45 @@ def gather_job_status(job_id: str, current_user: Annotated[User, Depends(get_cur
     return _run_dict(run)
 
 
+@router.post("/join-private", response_model=JobStartResponse)
+def join_private_group(payload: dict, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
+    """Join a private invite link then optionally extract members."""
+    link = (payload.get("link") or "").strip()
+    if not link:
+        raise HTTPException(status_code=400, detail="أدخل رابط الدعوة")
+    account_ids = payload.get("account_ids") or []
+    auto_leave = payload.get("auto_leave", False)
+    # First join, then extract
+    job_id = jobrunner.start_job(
+        kind="gather_join_private",
+        label=f"انضمام + تجميع من {link}",
+        entity_type="gather",
+        entity_id="join_private",
+        actor_user_id=current_user.id,
+        payload={"link": link, "account_ids": account_ids, "auto_leave": auto_leave, "actor_user_id": current_user.id},
+    )
+    return JobStartResponse(mode="queued", message="بدأ الانضمام والتجميع", job_id=job_id)
+
+
+@router.post("/search-telegram", response_model=dict)
+def search_telegram(payload: dict, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
+    """Search Telegram for groups/channels by keyword via Telethon."""
+    query = (payload.get("query") or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="أدخل كلمة بحث")
+    account_id = payload.get("account_id")
+    # Run inline since search is fast
+    from app.tasks.gather_tasks import telegram_search_run
+    run_id = jobrunner.create_job_run(kind="gather_search", label=f"بحث: {query}", entity_type="gather", actor_user_id=current_user.id, payload={})
+    try:
+        result = telegram_search_run(run_id, {"query": query, "account_id": account_id, "actor_user_id": current_user.id})
+        jobrunner.finish_job(run_id, result=result)
+        return result
+    except Exception as exc:
+        jobrunner.finish_job(run_id, error=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _run_dict(run) -> dict:
     import json
 

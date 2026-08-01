@@ -76,6 +76,8 @@ def _get_handler(kind: str):
         "security_ban_monitor": _security_ban_monitor,
         "sessions_import": _sessions_import,
         "account_profile_bulk": _account_profile_bulk,
+        "gather_join_private": _gather_join_private,
+        "gather_search": _gather_search,
     }
     return handlers.get(kind)
 
@@ -229,3 +231,17 @@ def _account_profile_bulk(run_id: str, entity_id: str | None):
 
     payload = _load_payload(run_id)
     return profile_bulk_run(run_id, payload)
+
+
+def _gather_join_private(run_id: str, entity_id: str | None):
+    from app.tasks.gather_tasks import gather_join_private_run
+
+    payload = _load_payload(run_id)
+    return gather_join_private_run(run_id, payload)
+
+
+def _gather_search(run_id: str, entity_id: str | None):
+    from app.tasks.gather_tasks import telegram_search_run
+
+    payload = _load_payload(run_id)
+    return telegram_search_run(run_id, payload)
