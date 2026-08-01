@@ -5,8 +5,7 @@ import {
 } from "lucide-react";
 import { useNav } from "../nav";
 import { StatCard } from "../ui";
-import { accounts, campaigns, dmCampaigns, proxies } from "../data";
-import { apiFetch, type DashboardSummary } from "../lib/api";
+import { apiFetch, type DashboardSummary, type JobRun, type TodayReport } from "../lib/api";
 
 const modules = [
   { id: "accounts",  label: "مدير الحسابات",      desc: "إضافة، استيراد، تهيئة وتحقق",      icon: Users,         tone: "brand"  },
@@ -32,6 +31,8 @@ const toneMap: Record<Tone, { icon: string; card: string }> = {
 export function HomeScreen() {
   const { push } = useNav();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [today, setToday] = useState<TodayReport | null>(null);
+  const [activeJobs, setActiveJobs] = useState<JobRun[]>([]);
 
   useEffect(() => {
     let mounted = true;
@@ -42,16 +43,20 @@ export function HomeScreen() {
       .catch(() => {
         if (mounted) setSummary(null);
       });
+    apiFetch<TodayReport>("/reports/today").then((data) => { if (mounted) setToday(data); }).catch(() => undefined);
+    const loadJobs = () => apiFetch<JobRun[]>("/jobs/runs?limit=5").then((rows) => { if (mounted) setActiveJobs(rows.filter((r) => ["queued", "running", "paused"].includes(r.status))); }).catch(() => undefined);
+    void loadJobs();
+    const timer = window.setInterval(loadJobs, 8000);
     return () => {
       mounted = false;
+      window.clearInterval(timer);
     };
   }, []);
 
-  const activeAccounts  = summary?.accounts_active ?? accounts.filter((a) => a.status === "active").length;
-  const activeProxies   = summary?.proxies_active ?? proxies.filter((p) => p.status === "active").length;
-  const activeCampaigns = summary?.campaigns_active ?? (campaigns.filter((c) => c.status === "active").length
-                        + dmCampaigns.filter((c) => c.status === "active").length);
-  const groupsCount = summary?.accounts_total ? Math.max(5, summary.accounts_total) : 5;
+  const activeAccounts  = summary?.accounts_active ?? 0;
+  const activeProxies   = summary?.proxies_active ?? 0;
+  const activeCampaigns = summary?.campaigns_active ?? 0;
+  const groupsCount = summary?.accounts_total ?? 0;
 
   return (
     <div className="animate-fade">
@@ -94,6 +99,34 @@ export function HomeScreen() {
             </button>
           );
         })}
+      </div>
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
+        <div className="card p-5">
+          <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-surface-400">📊 نشاط اليوم (حقيقي)</h3>
+          <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+            <div className="rounded-xl bg-surface-50 border border-surface-200 px-3 py-2"><div className="text-xs text-surface-500">مُجمَّع</div><div className="font-bold text-surface-800">{(today?.gathered_today ?? 0).toLocaleString()}</div></div>
+            <div className="rounded-xl bg-surface-50 border border-surface-200 px-3 py-2"><div className="text-xs text-surface-500">مُضاف</div><div className="font-bold text-surface-800">{(today?.added_today ?? 0).toLocaleString()}</div></div>
+            <div className="rounded-xl bg-surface-50 border border-surface-200 px-3 py-2"><div className="text-xs text-surface-500">رسائل DM</div><div className="font-bold text-surface-800">{(today?.dm_today ?? 0).toLocaleString()}</div></div>
+            <div className="rounded-xl bg-surface-50 border border-surface-200 px-3 py-2"><div className="text-xs text-surface-500">رسائل قروبات</div><div className="font-bold text-surface-800">{(today?.group_today ?? 0).toLocaleString()}</div></div>
+            <div className="rounded-xl bg-surface-50 border border-surface-200 px-3 py-2"><div className="text-xs text-surface-500">FloodWaits</div><div className="font-bold text-danger-600">{(today?.flood_today ?? 0).toLocaleString()}</div></div>
+            <div className="rounded-xl bg-surface-50 border border-surface-200 px-3 py-2"><div className="text-xs text-surface-500">عمليات اليوم</div><div className="font-bold text-accent-600">{(today?.total_operations_today ?? 0).toLocaleString()}</div></div>
+          </div>
+        </div>
+        <div className="card p-5">
+          <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-surface-400">⚙️ المهام النشطة الآن ({activeJobs.length})</h3>
+          {activeJobs.length === 0 && <p className="text-sm text-surface-500">لا توجد مهام جارية.</p>}
+          <div className="space-y-2">
+            {activeJobs.map((job) => (
+              <button key={job.id} onClick={() => push(["reports", "dashboard"])} className="w-full rounded-xl bg-surface-50 border border-surface-200 px-3 py-2 text-right transition hover:border-brand-300">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-surface-800">{job.label}</span>
+                  <span className="text-xs text-surface-500">{job.status === "paused" ? "⏸️" : "▶️"} {job.progress}%</span>
+                </div>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-200"><div className="h-full rounded-full bg-brand-500" style={{ width: `${job.progress}%` }} /></div>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
       <div className="mt-6">
         <button onClick={() => push(["exit"])} className="btn-danger w-full py-3">

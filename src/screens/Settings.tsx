@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Settings, KeyRound, Save, RotateCcw, Folder, Sliders, Bell, ShieldCheck, Globe, Database, FileText, CalendarClock, Lock, Archive, Cpu, Info, Server } from "lucide-react";
 import { useNav } from "../nav";
 import { Alert, Button, Checkbox, PageHeader, SectionTitle, useToast, InlineEdit, Field, OptionButton, Progress, ConfirmDialog, Table, StatCard, Spinner } from "../ui";
@@ -102,7 +102,7 @@ function useSettings() {
 
 function saveSetting(key: string, value: string, show: (msg: string, tone?: "danger" | "success") => void) {
   apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key, value, is_secret: false, description: key }] }) })
-    .then(() => show("تم الحفظ")).catch(() => show("تم الحفظ محلياً"));
+    .then(() => show("تم الحفظ")).catch((err) => show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger"));
 }
 
 export function SettingsModule() {
@@ -375,7 +375,7 @@ function LanguageSettings() {
           <OptionButton key={id} label={label} selected={timeFmt === id} onClick={() => setTimeFmt(id)} />
         ))}
         <div className="flex flex-wrap gap-2 pt-1">
-          <Button variant="primary" onClick={() => { s.set("language", lang); s.set("timezone", tz); void s.save().then((ok) => show(ok ? "تم حفظ إعدادات اللغة" : "تم الحفظ محلياً")); }}>💾 حفظ إعدادات اللغة</Button>
+          <Button variant="primary" onClick={() => { s.set("language", lang); s.set("timezone", tz); void s.save().then((ok) => show(ok ? "تم حفظ إعدادات اللغة" : "تعذر الحفظ", "danger")); }}>💾 حفظ إعدادات اللغة</Button>
           <Button onClick={() => push(["settings"])}>رجوع</Button>
         </div>
       </div>
@@ -403,10 +403,10 @@ function DatabaseSettings() {
         {checkOk && <Alert tone="success" title="✅ قاعدة البيانات سليمة" />}
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => show("تم فحص قاعدة البيانات — ✅ سليمة")}>🔧 فحص السلامة</Button>
-          <Button onClick={() => { apiFetch("/system/database/vacuum", { method: "POST", body: JSON.stringify({}) }).then(() => show("تم ضغط قاعدة البيانات (VACUUM)")).catch(() => show("تم الضغط محلياً")); }}>🗜️ ضغط قاعدة البيانات</Button>
+          <Button onClick={() => { apiFetch("/system/database/vacuum", { method: "POST", body: JSON.stringify({}) }).then(() => show("تم ضغط قاعدة البيانات (VACUUM)")).catch((err) => show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger")); }}>🗜️ ضغط قاعدة البيانات</Button>
           <Button onClick={() => { void downloadApiFile("/system/database/backup", "axogram-db-backup.json").then(() => show("تم تنزيل نسخة احتياطية")).catch(() => show("تعذر التنزيل", "danger")); }}>🔄 نسخ احتياطي للقاعدة</Button>
           <Button onClick={() => { void downloadApiFile("/system/database/backup", "axogram-db-export.json").then(() => show("تم تنزيل تصدير قاعدة البيانات")).catch(() => show("تعذر التصدير", "danger")); }}>📤 تصدير قاعدة البيانات</Button>
-          <Button variant="danger" onClick={() => { apiFetch("/system/database/cleanup?older_than_days=30", { method: "POST", body: JSON.stringify({}) }).then((r: any) => show(r?.message || "تم مسح السجلات القديمة", "danger")).catch(() => show("تم المسح محلياً", "danger")); }}>🗑️ مسح سجلات قديمة</Button>
+          <Button variant="danger" onClick={() => { apiFetch("/system/database/cleanup?older_than_days=30", { method: "POST", body: JSON.stringify({}) }).then((r: any) => show(r?.message || "تم مسح السجلات القديمة", "danger")).catch((err) => show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger")); }}>🗑️ مسح سجلات قديمة</Button>
         </div>
       </div>
       <div className="mt-4"><Button onClick={() => push(["settings"])}>رجوع</Button></div>
@@ -507,25 +507,54 @@ function AccessSettings() {
 function BackupSettings() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
   const [running, setRunning] = useState(false);
-  const [done, setDone] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [restoring, setRestoring] = useState(false);
+
+  const runBackup = async () => {
+    setRunning(true);
+    try {
+      await downloadApiFile("/system/database/backup", `axogram-backup-${new Date().toISOString().slice(0, 10)}.json`);
+      show("✅ تم تنزيل النسخة الاحتياطية الكاملة");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر النسخ الاحتياطي", "danger");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const restore = async () => {
+    if (!file) return;
+    setRestoring(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const response = await apiFetch<{ message: string }>("/system/database/restore", { method: "POST", body: form });
+      show(response.message);
+      setFile(null);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر الاستعادة", "danger");
+    } finally {
+      setRestoring(false);
+    }
+  };
+
   return (
     <div className="animate-fade">
       <PageHeader title="النسخ الاحتياطي والاستعادة" icon={<Archive className="h-5 w-5" />} />
       <div className="card p-5 max-w-2xl space-y-4">
-        {!running && !done && <Button variant="primary" className="w-full" onClick={() => { setRunning(true); setTimeout(() => { setRunning(false); setDone(true); }, 1800); }}>💾 نسخ احتياطي كامل الآن</Button>}
-        {running && <Progress value={80} label="جاري النسخ..." sub="80%" />}
-        {done && (
-          <div className="space-y-3">
-            <Alert tone="success" title="اكتمل — الحجم: 24 MB" />
-            <div className="flex gap-2">
-              <Button onClick={() => show("تم إرسال الملف كمرفق")}>📤 إرسال الملف</Button>
-              <Button onClick={() => setDone(false)}>➕ نسخة أخرى</Button>
-            </div>
-          </div>
-        )}
+        <Button variant="primary" className="w-full" disabled={running} onClick={() => void runBackup()}>
+          {running ? "جاري تجهيز النسخة..." : "💾 نسخ احتياطي كامل الآن"}
+        </Button>
+        <Button className="w-full" onClick={async () => { try { await downloadApiFile("/uploads/sessions/backup", "sessions-backup.zip"); } catch (err) { show(err instanceof Error ? err.message : "تعذر النسخ", "danger"); } }}>📦 نسخ الجلسات (ZIP)</Button>
         <div className="border-t border-surface-200 pt-3">
-          <Button onClick={() => show("فك ضغط وتحليل نسخة احتياطية...")}>🔄 استعادة من نسخة احتياطية</Button>
+          <SectionTitle>🔄 استعادة من نسخة احتياطية</SectionTitle>
+          <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <Button className="w-full" onClick={() => fileRef.current?.click()}>{file ? `تم اختيار: ${file.name}` : "📂 اختيار ملف النسخة"}</Button>
+          <Button variant="danger" className="w-full mt-2" disabled={!file || restoring} onClick={() => void restore()}>
+            {restoring ? "جاري الاستعادة..." : "⚠️ استعادة النسخة"}
+          </Button>
           <p className="mt-2 text-xs text-surface-500">⚠️ سيُستبدل الحالي بالكامل عند الاستعادة.</p>
         </div>
       </div>
@@ -565,31 +594,30 @@ function PerformanceSettings() {
 
 function SysInfo() {
   const { push } = useNav();
-  const { show, node } = useToast();
-  const [sys, setSys] = useState<Record<string, string>>({});
-  useEffect(() => { apiFetch<Record<string, string>>("/health/system").then(setSys).catch(() => undefined); }, []);
-  const info = [
-    ["الإصدار", sys.version ?? "v1.0"],
-    ["تاريخ الإصدار", sys.release_date ?? "2026-06-01"],
-    ["Python", sys.python ?? "3.11.4"],
-    ["Telethon/Pyrogram", sys.telethon ?? "Telethon 1.34"],
-    ["قاعدة البيانات", sys.database ?? "PostgreSQL"],
-    ["نظام التشغيل", sys.os ?? "Linux Ubuntu 22.04"],
-    ["CPU", sys.cpu ?? "38%"],
-    ["RAM", sys.ram ?? "62%"],
-    ["التخزين", sys.storage ?? "48%"],
-    ["وقت التشغيل", sys.uptime ?? "3 أيام 7 ساعات"],
-    ["عنوان السيرفر", sys.server_address ?? "203.0.113.5"],
-  ];
+  const [sys, setSys] = useState<any>(null);
+  useEffect(() => { apiFetch<any>("/system/info").then(setSys).catch(() => undefined); }, []);
+  const info = sys ? [
+    ["الإصدار", sys.version ?? "1.0.0"],
+    ["Python", sys.python ?? "—"],
+    ["نظام التشغيل", sys.os ?? "—"],
+    ["CPU", sys.cpu ?? "—"],
+    ["RAM", sys.ram ?? "—"],
+    ["مساحة القرص", sys.storage_disk ?? "—"],
+    ["ملفات التخزين", `${sys.storage_files ?? 0} (${sys.storage_size ?? "—"})`],
+    ["وقت التشغيل", sys.uptime ?? "—"],
+    ["قاعدة البيانات", sys.database ?? "—"],
+    ["الحسابات", String(sys.counts?.accounts ?? 0)],
+    ["البروكسيهات", String(sys.counts?.proxies ?? 0)],
+    ["الحملات", String(sys.counts?.campaigns ?? 0)],
+  ] : [["جاري التحميل", "..."]] as Array<[string, string]>;
   return (
     <div className="animate-fade">
-      <PageHeader title="معلومات النظام والإصدار" icon={<Info className="h-5 w-5" />} />
+      <PageHeader title="معلومات النظام والإصدار" subtitle="بيانات حية من السيرفر" icon={<Info className="h-5 w-5" />} />
       <div className="card p-5 max-w-2xl">
-        <Table columns={["العنصر","القيمة"]} rows={info} />
-        <div className="mt-3"><Button onClick={() => show("أنت على أحدث إصدار ✅")}>🔄 فحص وجود تحديثات</Button></div>
+        <Table columns={["العنصر", "القيمة"]} rows={info} />
+        <div className="mt-3"><Button onClick={() => void apiFetch<any>("/system/info").then(setSys).catch(() => undefined)}>🔄 تحديث</Button></div>
       </div>
       <div className="mt-4"><Button onClick={() => push(["settings"])}>رجوع</Button></div>
-      {node}
     </div>
   );
 }

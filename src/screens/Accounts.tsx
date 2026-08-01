@@ -20,6 +20,7 @@ import {
   Archive,
   Search,
   Download,
+  Plus,
 } from "lucide-react";
 import { useNav } from "../nav";
 import {
@@ -43,9 +44,11 @@ import {
   Spinner,
   TextArea,
 } from "../ui";
+import { JobProgressCard } from "../lib/job";
 import {
   apiFetch,
   type AccountRecord,
+  type AccountPool,
   type ActivityLogRecord,
   type DashboardSummary,
   type ProxyRecord,
@@ -59,7 +62,6 @@ import {
   type WarmupResult,
   downloadApiFile,
 } from "../lib/api";
-import { accounts } from "../data";
 
 const accountMenu = [
   { id: "add", label: "إضافة حساب جديد", desc: "إضافة وحفظ الحساب في قاعدة البيانات", icon: UserPlus },
@@ -95,7 +97,7 @@ function PlaceholderCard({ title, desc }: { title: string; desc: string }) {
 }
 
 function useAccounts() {
-  const [rows, setRows] = useState<AccountRecord[]>(accounts as unknown as AccountRecord[]);
+  const [rows, setRows] = useState<AccountRecord[]>([]);
   useEffect(() => { apiFetch<AccountRecord[]>("/accounts").then(setRows).catch(() => undefined); }, []);
   return rows;
 }
@@ -108,10 +110,16 @@ export function AccountsModule() {
     apiFetch<DashboardSummary>("/reports/dashboard").then(setSummary).catch(() => setSummary(null));
   }, []);
 
+  const [statusCounts, setStatusCounts] = useState({ blocked: 0, restricted: 0 });
+  useEffect(() => {
+    apiFetch<AccountRecord[]>("/accounts").then((rows) => {
+      setStatusCounts({ blocked: rows.filter((r) => r.status === "blocked").length, restricted: rows.filter((r) => r.status === "restricted").length });
+    }).catch(() => undefined);
+  }, []);
   const active = summary?.accounts_active ?? 0;
   const total = summary?.accounts_total ?? 0;
-  const blocked = Math.max(0, total - active);
-  const restricted = Math.max(0, blocked > 0 ? Math.floor(blocked / 2) : 0);
+  const blocked = statusCounts.blocked;
+  const restricted = statusCounts.restricted;
 
   return (
     <div className="animate-fade">
@@ -410,14 +418,13 @@ function ImportSessions() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [sessions, setSessions] = useState<TelegramAuthSessionRecord[]>([]);
   const [method, setMethod] = useState<"folder" | "file" | "text" | "string" | "zip">("file");
-  const [path, setPath] = useState("");
   const [textArea, setTextArea] = useState("");
   const [zipPass, setZipPass] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<{ valid: number; invalid: number; dup: number } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<{ total: number; valid: number; invalid: number; duplicate: number } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -435,104 +442,139 @@ function ImportSessions() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const upload = async () => {
-    if (!file) return;
-    setUploading(true);
+  const startImport = async () => {
+    setRunning(true);
+    setImportResult(null);
+    setJobId(null);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("category", method === "zip" ? "zip" : method === "text" ? "txt" : "sessions");
-      await apiFetch("/uploads", { method: "POST", body: form });
-      show("تم رفع الملف إلى السيرفر");
-      setFile(null);
-      await load();
+      let jobIdValue: string;
+      if (method === "file" || method === "folder") {
+        if (!files.length) {
+          show("اختر ملفات .session أولاً", "danger");
+          setRunning(false);
+          return;
+        }
+        const form = new FormData();
+        files.forEach((f) => form.append("files", f));
+        const response = await apiFetch<{ job_id: string }>("/accounts/import/sessions", { method: "POST", body: form });
+        jobIdValue = response.job_id;
+      } else if (method === "zip") {
+        if (!files.length) {
+          show("اختر ملف ZIP أولاً", "danger");
+          setRunning(false);
+          return;
+        }
+        const form = new FormData();
+        form.append("file", files[0]);
+        if (zipPass) form.append("password", zipPass);
+        const response = await apiFetch<{ job_id: string }>("/accounts/import/zip", { method: "POST", body: form });
+        jobIdValue = response.job_id;
+      } else if (method === "string") {
+        const sessionsList = textArea.split("\n").map((s) => s.trim()).filter(Boolean);
+        if (!sessionsList.length) {
+          show("أدخل String Session واحداً على الأقل", "danger");
+          setRunning(false);
+          return;
+        }
+        const response = await apiFetch<{ job_id: string }>("/accounts/import/string", { method: "POST", body: JSON.stringify({ sessions: sessionsList }) });
+        jobIdValue = response.job_id;
+      } else {
+        if (!textArea.trim()) {
+          show("ألصق محتوى الملف النصي (هاتف|session لكل سطر)", "danger");
+          setRunning(false);
+          return;
+        }
+        const response = await apiFetch<{ job_id: string }>("/accounts/import/text", { method: "POST", body: JSON.stringify({ content: textArea }) });
+        jobIdValue = response.job_id;
+      }
+      setJobId(jobIdValue);
     } catch (err) {
-      show(err instanceof Error ? err.message : "تعذر رفع الملف", "danger");
-    } finally {
-      setUploading(false);
+      show(err instanceof Error ? err.message : "تعذر بدء الاستيراد", "danger");
+      setRunning(false);
     }
   };
 
-  const runScan = () => {
-    setScanning(true);
-    setScanResult(null);
-    setTimeout(() => {
-      setScanning(false);
-      setScanResult({ valid: 12, invalid: 2, dup: 1 });
-    }, 1200);
+  const onJobDone = (run: any) => {
+    setRunning(false);
+    if (run.status === "failed") {
+      show(run.error?.split("\n")[0] || "فشل الاستيراد", "danger");
+      return;
+    }
+    try {
+      const result = run.result_json ? JSON.parse(run.result_json) : null;
+      if (result?.summary) {
+        setImportResult(result.summary);
+        show(`✅ اكتمل الاستيراد: ${result.summary.valid} صالحة | ${result.summary.duplicate} مكررة | ${result.summary.invalid} تالفة`);
+      }
+    } catch {
+      /* ignore */
+    }
+    void load();
   };
 
   const methods: Array<{ id: typeof method; label: string; desc: string }> = [
-    { id: "folder", label: "📁 من مجلد (جميع .session)", desc: "مسار يحتوي كل ملفات الجلسات" },
+    { id: "folder", label: "📁 من مجلد (جميع .session)", desc: "اختر عدة ملفات .session" },
     { id: "file", label: "📄 ملف واحد", desc: ".session منفرد" },
-    { id: "text", label: "📋 من ملف نصي (أرقام+جلسات)", desc: "نص يحتوي أرقام وجلسات" },
+    { id: "text", label: "📋 من ملف نصي (أرقام+جلسات)", desc: "هاتف|session لكل سطر" },
     { id: "string", label: "🔑 من String Session", desc: "سلسلة Telethon/Pyrogram" },
     { id: "zip", label: "📦 من ملف ZIP", desc: "جلسات مضغوطة (كلمة مرور اختيارية)" },
   ];
 
   return (
     <div className="animate-fade">
-      <PageHeader title="استيراد الجلسات" subtitle="5 طرق لاستيراد الجلسات ومتابعة جلسات OTP" icon={<FolderInput className="h-5 w-5" />} />
+      <PageHeader title="استيراد الجلسات" subtitle="فحص حقيقي لكل جلسة عبر تيليجرام واستيراد الصالحة فقط" icon={<FolderInput className="h-5 w-5" />} />
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card p-5 space-y-4">
           <SectionTitle>اختر طريقة الاستيراد</SectionTitle>
           <div className="space-y-2">
             {methods.map((m) => (
-              <OptionButton key={m.id} label={m.label} desc={m.desc} selected={method === m.id} onClick={() => { setMethod(m.id); setScanResult(null); }} />
+              <OptionButton key={m.id} label={m.label} desc={m.desc} selected={method === m.id} onClick={() => { setMethod(m.id); setImportResult(null); setFiles([]); }} />
             ))}
           </div>
 
-          {method === "folder" && (
+          {(method === "folder" || method === "file") && (
             <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50 p-3">
-              <Field label="مسار المجلد" placeholder="/path/to/sessions/" value={path} onChange={setPath} />
-              <Button className="w-full" onClick={runScan}>🔍 فحص المجلد</Button>
-            </div>
-          )}
-          {method === "file" && (
-            <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50 p-3">
-              <input ref={fileRef} type="file" accept=".session" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-              <Button variant="primary" className="w-full" onClick={() => fileRef.current?.click()}>{file ? `تم اختيار: ${file.name}` : "اختيار ملف .session"}</Button>
-              <Button className="w-full" disabled={!file} onClick={runScan}>🔍 فحص الملف</Button>
+              <input ref={fileRef} type="file" accept=".session" multiple className="hidden" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
+              <Button variant="primary" className="w-full" onClick={() => fileRef.current?.click()}>
+                {files.length ? `تم اختيار ${files.length} ملف` : method === "folder" ? "اختيار مجلد ملفات الجلسات" : "اختيار ملف .session"}
+              </Button>
+              {files.length > 0 && <div className="max-h-32 overflow-auto text-xs text-surface-500">{files.map((f) => <div key={f.name}>📄 {f.name}</div>)}</div>}
             </div>
           )}
           {method === "text" && (
             <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50 p-3">
-              <Field label="مسار الملف النصي" placeholder="/path/to/sessions.txt" value={path} onChange={setPath} />
-              <Button className="w-full" onClick={runScan}>🔍 فحص الملف</Button>
+              <TextArea label="محتوى الملف النصي (هاتف|session لكل سطر)" rows={5} value={textArea} onChange={setTextArea} placeholder={"+966500000001|1BAA...\n+966500000002|1BAB..."} />
             </div>
           )}
           {method === "string" && (
             <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50 p-3">
-              <TextArea label="String Sessions (واحد per سطر، اكتب Done عند الانتهاء)" rows={4} value={textArea} onChange={setTextArea} />
-              <Button className="w-full" disabled={!textArea.trim()} onClick={runScan}>🔍 فحص + تحويل لملفات .session</Button>
+              <TextArea label="String Sessions (واحد per سطر)" rows={5} value={textArea} onChange={setTextArea} placeholder={"1BAA...\n1BAB..."} />
             </div>
           )}
           {method === "zip" && (
             <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50 p-3">
-              <input ref={fileRef} type="file" accept=".zip" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-              <Button variant="primary" className="w-full" onClick={() => fileRef.current?.click()}>{file ? `تم اختيار: ${file.name}` : "اختيار ملف ZIP"}</Button>
+              <input ref={fileRef} type="file" accept=".zip" className="hidden" onChange={(e) => setFiles(e.target.files ? Array.from(e.target.files) : [])} />
+              <Button variant="primary" className="w-full" onClick={() => fileRef.current?.click()}>{files.length ? `تم اختيار: ${files[0].name}` : "اختيار ملف ZIP"}</Button>
               <Field label="كلمة مرور ZIP (إن وُجدت)" value={zipPass} onChange={setZipPass} type="password" />
-              <Button className="w-full" disabled={!file} onClick={runScan}>🔍 فك الضغط + فحص...</Button>
             </div>
           )}
 
-          {scanning && <Progress value={60} label="🔍 جاري الفحص..." sub="60%" tone="accent" />}
-          {scanResult && (
+          <Button variant="primary" className="w-full" disabled={running || !files.length && method !== "string" && method !== "text"} onClick={() => void startImport()}>
+            {running ? "جاري الفحص والاستيراد..." : "🔍 فحص واستيراد الجلسات"}
+          </Button>
+
+          <JobProgressCard jobId={jobId} onDone={onJobDone} />
+
+          {importResult && !running && (
             <Alert tone="success" title="نتائج الفحص">
               <div className="mt-1 flex flex-wrap gap-2">
-                <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">✅ صالحة: {scanResult.valid}</span>
-                <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">❌ تالفة: {scanResult.invalid}</span>
-                <span className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">🔁 مكررة: {scanResult.dup}</span>
+                <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">✅ صالحة: {importResult.valid}</span>
+                <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">❌ تالفة: {importResult.invalid}</span>
+                <span className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">🔁 مكررة: {importResult.duplicate}</span>
               </div>
             </Alert>
           )}
-
-          {(scanResult || method === "file" || method === "zip") && (
-            <Button variant="primary" className="w-full" disabled={uploading} onClick={() => void upload()}>
-              {uploading ? "جاري الاستيراد..." : "✅ استيراد الصالحة"}
-            </Button>
-          )}
-          <Alert tone="info" title="ملاحظة">الفحص يحاكي التحقق ويبقي الربط الفعلي مع محرك تيليجرام جاهزاً عند تفعيله.</Alert>
+          <Alert tone="info" title="ملاحظة">تُفحص كل جلسة باتصال حقيقي بتليجرام؛ التالفة تُرفض والصلاح منها تُسجّل كحسابات جاهزة للعمل.</Alert>
         </div>
         <div className="card p-5 space-y-4">
           <SectionTitle>جلسات OTP / الربط الحالية</SectionTitle>
@@ -857,44 +899,15 @@ function ValidateAccounts() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
-  const [queueEnabled, setQueueEnabled] = useState<boolean | null>(null);
   const [result, setResult] = useState<AccountValidationResult | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      apiFetch<AccountRecord[]>("/accounts"),
-      apiFetch<{ queue_available: boolean }>("/jobs/health").catch(() => ({ queue_available: false })),
-    ])
-      .then(([accountRows, jobHealth]) => {
-        setRows(accountRows);
-        setQueueEnabled(jobHealth.queue_available);
-      })
+    apiFetch<AccountRecord[]>("/accounts")
+      .then(setRows)
+      .catch((err) => show(err instanceof Error ? err.message : "تعذر تحميل الحسابات", "danger"))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!jobId) return;
-    const timer = window.setInterval(async () => {
-      try {
-        const status = await apiFetch<JobStatusResponse>(`/jobs/${jobId}`);
-        if (status.status === "finished") {
-          setResult(status.result as unknown as AccountValidationResult);
-          setRunning(false);
-          window.clearInterval(timer);
-        }
-        if (status.status === "failed") {
-          show(status.error || "فشل تنفيذ المهمة", "danger");
-          setRunning(false);
-          window.clearInterval(timer);
-        }
-      } catch (err) {
-        setRunning(false);
-        window.clearInterval(timer);
-        show(err instanceof Error ? err.message : "تعذر متابعة حالة المهمة", "danger");
-      }
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [jobId, show]);
 
   const startValidation = async (selectedOnly: boolean) => {
     setRunning(true);
@@ -903,21 +916,26 @@ function ValidateAccounts() {
     try {
       const response = await apiFetch<JobStartResponse>("/jobs/accounts/validate", {
         method: "POST",
-        body: JSON.stringify({
-          account_ids: selectedOnly ? selected : null,
-          run_inline: queueEnabled === false,
-        }),
+        body: JSON.stringify({ account_ids: selectedOnly ? selected : null }),
       });
-      show(response.message);
-      if (response.mode === "finished") {
-        setResult(response.result as unknown as AccountValidationResult);
-        setRunning(false);
-      } else {
-        setJobId(response.job_id || null);
-      }
+      setJobId(response.job_id || null);
     } catch (err) {
       setRunning(false);
       show(err instanceof Error ? err.message : "تعذر بدء التحقق", "danger");
+    }
+  };
+
+  const onJobDone = (run: any) => {
+    setRunning(false);
+    if (run.status === "failed") {
+      show(run.error?.split("\n")[0] || "فشل التحقق — تأكد من ضبط API ID/Hash ووجود جلسات", "danger");
+      return;
+    }
+    try {
+      const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+      if (parsed?.summary) setResult(parsed as AccountValidationResult);
+    } catch {
+      /* ignore */
     }
   };
 
@@ -925,12 +943,10 @@ function ValidateAccounts() {
 
   return (
     <div className="animate-fade">
-      <PageHeader title="التحقق من الصحة" subtitle="يدعم Worker/Queue مع fallback للتنفيذ المباشر" icon={<ShieldCheck className="h-5 w-5" />} />
+      <PageHeader title="التحقق من الصحة" subtitle="فحص حقيقي لكل حساب عبر اتصال تيليجرام (get_me)" icon={<ShieldCheck className="h-5 w-5" />} />
       {loading ? <Spinner label="جاري تحميل الحسابات..." /> : (
         <div className="space-y-4">
-          <Alert tone={queueEnabled ? "info" : "warn"} title={queueEnabled ? "قائمة الانتظار متاحة" : "قائمة الانتظار غير متاحة — سيتم التنفيذ المباشر"}>
-            {queueEnabled ? "سيتم إرسال المهمة إلى Worker عند توفر Redis/Worker." : "النتيجة ستُنفذ مباشرة داخل الـ API إلى أن يتوفر Redis/Worker."}
-          </Alert>
+          <Alert tone="info" title="ملاحظة">الفحص يتصل فعلياً بتيليجرام لكل حساب بجلسة — الحسابات بدون جلسة تُعلَّم كمقيدة.</Alert>
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => setSelected(rows.map((row) => row.id))}>تحديد الكل</Button>
             <Button onClick={() => setSelected([])}>إلغاء الكل</Button>
@@ -938,12 +954,12 @@ function ValidateAccounts() {
             <Button disabled={running || selected.length === 0} onClick={() => void startValidation(true)}>فحص المحدد ({selected.length})</Button>
           </div>
           <Table columns={["", "الهاتف", "الاسم", "الحالة"]} rows={rows.map((row) => [
-            <input type="checkbox" checked={selected.includes(row.id)} onChange={() => toggle(row.id)} className="h-4 w-4 accent-brand-600" />,
+            <input key={row.id} type="checkbox" checked={selected.includes(row.id)} onChange={() => toggle(row.id)} className="h-4 w-4 accent-brand-600" />,
             row.phone,
             row.name,
-            <StatusChip status={row.status} />,
+            <StatusChip key={`s${row.id}`} status={row.status} />,
           ])} />
-          {running && <Progress value={jobId ? 55 : 80} label={jobId ? `المهمة في الانتظار: ${jobId}` : "جاري تنفيذ الفحص..."} sub={jobId ? "Queue" : "Inline"} tone="accent" />}
+          <JobProgressCard jobId={jobId} onDone={onJobDone} />
           {result && (
             <div className="space-y-4">
               <Alert tone="success" title="اكتمل التحقق">
@@ -957,7 +973,7 @@ function ValidateAccounts() {
               <Table columns={["الهاتف", "الاسم", "الحالة", "السبب", "آخر فحص"]} rows={result.rows.map((row) => [
                 row.phone,
                 row.name,
-                <StatusChip status={row.status} />,
+                <StatusChip key={row.account_id} status={row.status} />,
                 row.reason,
                 new Date(row.last_checked).toLocaleString("ar-SA"),
               ])} />
@@ -972,52 +988,26 @@ function ValidateAccounts() {
 
 function WarmupAccounts() {
   const { show, node } = useToast();
+  const { push } = useNav();
   const [rows, setRows] = useState<AccountRecord[]>([]);
   const [selected, setSelected] = useState<number[]>([]);
   const [days, setDays] = useState("7");
   const [intensity, setIntensity] = useState<"light" | "medium" | "intensive">("medium");
-  const [queueEnabled, setQueueEnabled] = useState<boolean | null>(null);
   const [running, setRunning] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [result, setResult] = useState<WarmupResult | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      apiFetch<AccountRecord[]>("/accounts"),
-      apiFetch<{ queue_available: boolean }>("/jobs/health").catch(() => ({ queue_available: false })),
-    ]).then(([accountRows, jobHealth]) => {
-      setRows(accountRows);
-      setQueueEnabled(jobHealth.queue_available);
-    });
+    apiFetch<AccountRecord[]>("/accounts")
+      .then(setRows)
+      .catch((err) => show(err instanceof Error ? err.message : "تعذر تحميل الحسابات", "danger"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!jobId) return;
-    const timer = window.setInterval(async () => {
-      try {
-        const status = await apiFetch<JobStatusResponse>(`/jobs/${jobId}`);
-        if (status.status === "finished") {
-          setResult(status.result as unknown as WarmupResult);
-          setRunning(false);
-          window.clearInterval(timer);
-        }
-        if (status.status === "failed") {
-          show(status.error || "فشل تنفيذ التهيئة", "danger");
-          setRunning(false);
-          window.clearInterval(timer);
-        }
-      } catch (err) {
-        setRunning(false);
-        window.clearInterval(timer);
-        show(err instanceof Error ? err.message : "تعذر متابعة حالة المهمة", "danger");
-      }
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [jobId, show]);
 
   const startWarmup = async () => {
     setRunning(true);
     setResult(null);
+    setJobId(null);
     try {
       const response = await apiFetch<JobStartResponse>("/jobs/accounts/warmup", {
         method: "POST",
@@ -1025,19 +1015,26 @@ function WarmupAccounts() {
           account_ids: selected.length ? selected : null,
           days: Number(days || 7),
           intensity,
-          run_inline: queueEnabled === false,
         }),
       });
-      show(response.message);
-      if (response.mode === "finished") {
-        setResult(response.result as unknown as WarmupResult);
-        setRunning(false);
-      } else {
-        setJobId(response.job_id || null);
-      }
+      setJobId(response.job_id || null);
     } catch (err) {
       setRunning(false);
       show(err instanceof Error ? err.message : "تعذر بدء التهيئة", "danger");
+    }
+  };
+
+  const onJobDone = (run: any) => {
+    setRunning(false);
+    if (run.status === "failed") {
+      show(run.error?.split("\n")[0] || "فشل التسخين — تأكد من الجلسات وضبط API", "danger");
+      return;
+    }
+    try {
+      const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+      if (parsed?.summary) setResult(parsed as WarmupResult);
+    } catch {
+      /* ignore */
     }
   };
 
@@ -1045,17 +1042,22 @@ function WarmupAccounts() {
 
   return (
     <div className="animate-fade">
-      <PageHeader title="تهيئة الحسابات" subtitle="خطة Warmup عبر Worker أو تنفيذ مباشر" icon={<Flame className="h-5 w-5" />} />
+      <PageHeader title="تهيئة الحسابات (Warmup)" subtitle="تنفيذ فعلي: اتصال بالحساب وإرسال رسائل تهيئة لطيفة" icon={<Flame className="h-5 w-5" />} />
       <div className="space-y-4">
-        <Alert tone={queueEnabled ? "info" : "warn"} title={queueEnabled ? "سيتم إرسال المهمة للـ Worker عند الحاجة" : "سيتم تجهيز الخطة مباشرة داخل الـ API"} />
+        <Alert tone="info" title="كيف يعمل التسخين؟">يقوم بجلسات اتصال حقيقية بالحسابات وإرسال رسائل تهيئة إلى Saved Messages بتأخيرات عشوائية حسب الشدة — يحسّن درجة صحة الحساب.</Alert>
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="card p-5 space-y-3">
             <SectionTitle>اختيار الحسابات</SectionTitle>
-            <Button onClick={() => setSelected(rows.map((row) => row.id))}>تحديد الكل</Button>
             <div className="space-y-2">
-              {rows.map((row) => (
-                <Checkbox key={row.id} label={`${row.name} — ${row.phone}`} checked={selected.includes(row.id)} onChange={() => toggle(row.id)} />
-              ))}
+              <div className="flex gap-2">
+                <Button onClick={() => setSelected(rows.map((row) => row.id))}>تحديد الكل</Button>
+                <Button onClick={() => setSelected([])}>إلغاء الكل</Button>
+              </div>
+              <div className="max-h-72 space-y-2 overflow-auto">
+                {rows.map((row) => (
+                  <Checkbox key={row.id} label={`${row.name} — ${row.phone}`} checked={selected.includes(row.id)} onChange={() => toggle(row.id)} />
+                ))}
+              </div>
             </div>
           </div>
           <div className="card p-5 space-y-3">
@@ -1063,49 +1065,137 @@ function WarmupAccounts() {
             <Field label="عدد الأيام" value={days} onChange={setDays} placeholder="7" />
             <div className="grid gap-2">
               <OptionButton label="خفيف" selected={intensity === "light"} onClick={() => setIntensity("light")} />
-              <OptionButton label="متوسط" selected={intensity === "medium"} onClick={() => setIntensity("medium")} />
+              <OptionButton label="متوسط (موصى)" selected={intensity === "medium"} onClick={() => setIntensity("medium")} />
               <OptionButton label="مكثف" selected={intensity === "intensive"} onClick={() => setIntensity("intensive")} />
             </div>
-            <Button variant="primary" className="w-full" disabled={running} onClick={() => void startWarmup()}>{running ? "جاري تجهيز الخطة..." : "بدء التهيئة"}</Button>
-            {running && <Progress value={jobId ? 55 : 80} label={jobId ? `المهمة في الانتظار: ${jobId}` : "جاري تجهيز الخطة..."} sub={jobId ? "Queue" : "Inline"} tone="warn" />}
+            <Button variant="primary" className="w-full" disabled={running} onClick={() => void startWarmup()}>{running ? "جاري التسخين..." : "بدء التهيئة"}</Button>
+            <JobProgressCard jobId={jobId} onDone={onJobDone} />
           </div>
         </div>
         {result && (
           <div className="card p-5 space-y-4">
-            <Alert tone="success" title="تم تجهيز خطة التهيئة">
+            <Alert tone="success" title="اكتمل التسخين">
               <div className="space-y-1 text-xs">
                 <div>عدد الحسابات: {result.summary.target_count}</div>
                 <div>الأيام: {result.summary.days}</div>
                 <div>الشدة: {result.summary.intensity}</div>
+                <div>الخطوات المنفذة: {result.steps.length}</div>
               </div>
             </Alert>
-            <Table columns={["الهاتف", "الإجراء", "النتيجة"]} rows={result.steps.map((step) => [step.phone, step.action, step.result])} />
+            <Table columns={["الهاتف", "الإجراء", "النتيجة"]} rows={result.steps.map((step, i) => [step.phone, step.action, step.result])} />
           </div>
         )}
       </div>
+      <div className="mt-4"><Button onClick={() => push(["accounts"])}>رجوع</Button></div>
       {node}
     </div>
   );
 }
 
-
-
 function AccountPools() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [view, setView] = useState<"list"|"create"|"detail">("list");
-  const [selectedPool, setSelectedPool] = useState<string|null>(null);
+  const [view, setView] = useState<"list" | "create" | "detail">("list");
+  const [pools, setPools] = useState<AccountPool[]>([]);
+  const [detail, setDetail] = useState<AccountPool | null>(null);
+  const [accounts, setAccounts] = useState<AccountRecord[]>([]);
   const [poolName, setPoolName] = useState("");
   const [poolDesc, setPoolDesc] = useState("");
-  const [poolPurpose, setPoolPurpose] = useState<"gather"|"add"|"dm"|"campaign"|"multi">("multi");
+  const [poolPurpose, setPoolPurpose] = useState("multi");
+  const [loading, setLoading] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
-  const allAccounts = useAccounts();
+  const [addMode, setAddMode] = useState(false);
+  const [toAdd, setToAdd] = useState<number[]>([]);
+  const [toRemove, setToRemove] = useState<number[]>([]);
 
-  const mockPools = [
-    { name:"مجموعة A", count:4, active:3, purpose:"تجميع+إضافة" },
-    { name:"مجموعة B", count:2, active:2, purpose:"تجميع فقط"   },
-    { name:"مجموعة C", count:3, active:1, purpose:"متعدد الأغراض"},
-  ];
+  const loadPools = async () => {
+    setLoading(true);
+    try {
+      setPools(await apiFetch<AccountPool[]>("/accounts/pools"));
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر تحميل المجموعات", "danger");
+    } finally {
+      setLoading(false);
+    }
+  };
+  const loadAccounts = async () => {
+    try {
+      setAccounts(await apiFetch<AccountRecord[]>("/accounts"));
+    } catch {
+      setAccounts([]);
+    }
+  };
+  useEffect(() => {
+    void loadPools();
+    void loadAccounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const openDetail = async (id: number) => {
+    try {
+      setDetail(await apiFetch<AccountPool>(`/accounts/pools/${id}`));
+      setView("detail");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر فتح المجموعة", "danger");
+    }
+  };
+
+  const createPool = async () => {
+    if (!poolName.trim()) return;
+    try {
+      await apiFetch<AccountPool>("/accounts/pools", { method: "POST", body: JSON.stringify({ name: poolName, description: poolDesc || null, purpose: poolPurpose }) });
+      show("✅ تم إنشاء المجموعة");
+      setPoolName("");
+      setPoolDesc("");
+      setView("list");
+      await loadPools();
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر إنشاء المجموعة", "danger");
+    }
+  };
+
+  const deletePool = async () => {
+    if (!detail) return;
+    try {
+      await apiFetch(`/accounts/pools/${detail.id}`, { method: "DELETE" });
+      show("تم حذف المجموعة", "danger");
+      setConfirmDel(false);
+      setDetail(null);
+      setView("list");
+      await loadPools();
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر الحذف", "danger");
+    }
+  };
+
+  const assignSelected = async () => {
+    if (!detail || !toAdd.length) return;
+    try {
+      for (const accountId of toAdd) {
+        await apiFetch(`/accounts/${accountId}/pool/${detail.id}`, { method: "POST", body: JSON.stringify({}) });
+      }
+      show(`✅ أُضيف ${toAdd.length} حساب للمجموعة`);
+      setToAdd([]);
+      setAddMode(false);
+      setDetail(await apiFetch<AccountPool>(`/accounts/pools/${detail.id}`));
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر الإضافة", "danger");
+    }
+  };
+
+  const removeSelected = async () => {
+    if (!detail || !toRemove.length) return;
+    try {
+      for (const accountId of toRemove) {
+        await apiFetch(`/accounts/${accountId}/pool`, { method: "DELETE" });
+      }
+      show(`أُزيل ${toRemove.length} حساب`);
+      setToRemove([]);
+      setDetail(await apiFetch<AccountPool>(`/accounts/pools/${detail.id}`));
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر الإزالة", "danger");
+    }
+  };
 
   if (view === "create") {
     return (
@@ -1115,13 +1205,15 @@ function AccountPools() {
           <Field label="اسم المجموعة" placeholder="مجموعة D" value={poolName} onChange={setPoolName} />
           <Field label="وصف المجموعة (اختياري)" placeholder="وصف..." value={poolDesc} onChange={setPoolDesc} />
           <SectionTitle>الغرض الرئيسي للمجموعة</SectionTitle>
-          <OptionButton label="📥 تجميع فقط"              selected={poolPurpose==="gather"}   onClick={() => setPoolPurpose("gather")} />
-          <OptionButton label="📤 إضافة فقط"              selected={poolPurpose==="add"}      onClick={() => setPoolPurpose("add")} />
-          <OptionButton label="💬 رسائل فقط"              selected={poolPurpose==="dm"}       onClick={() => setPoolPurpose("dm")} />
-          <OptionButton label="📢 حملات قروبات فقط"      selected={poolPurpose==="campaign"} onClick={() => setPoolPurpose("campaign")} />
-          <OptionButton label="🔀 متعدد الأغراض"          selected={poolPurpose==="multi"}    onClick={() => setPoolPurpose("multi")} />
+          <div className="grid grid-cols-2 gap-2">
+            <OptionButton label="📥 تجميع فقط" selected={poolPurpose === "gather"} onClick={() => setPoolPurpose("gather")} />
+            <OptionButton label="📤 إضافة فقط" selected={poolPurpose === "add"} onClick={() => setPoolPurpose("add")} />
+            <OptionButton label="💬 رسائل فقط" selected={poolPurpose === "dm"} onClick={() => setPoolPurpose("dm")} />
+            <OptionButton label="📢 حملات قروبات" selected={poolPurpose === "campaign"} onClick={() => setPoolPurpose("campaign")} />
+            <OptionButton label="🔀 متعدد الأغراض" selected={poolPurpose === "multi"} onClick={() => setPoolPurpose("multi")} />
+          </div>
           <div className="flex gap-2 pt-2">
-            <Button variant="primary" className="flex-1" disabled={!poolName} onClick={() => { show("تم إنشاء المجموعة"); setView("list"); setPoolName(""); }}>💾 حفظ المجموعة</Button>
+            <Button variant="primary" className="flex-1" disabled={!poolName} onClick={() => void createPool()}>💾 حفظ المجموعة</Button>
             <Button onClick={() => setView("list")}>❌ إلغاء</Button>
           </div>
         </div>
@@ -1130,47 +1222,53 @@ function AccountPools() {
     );
   }
 
-  if (view === "detail" && selectedPool) {
-    const pool = mockPools.find(p=>p.name===selectedPool)!;
-    const poolAccounts = allAccounts.slice(0,pool.count);
-    const [addMode, setAddMode] = useState(false);
-    const [toAdd, setToAdd]     = useState<number[]>([]);
-    const [toRemove, setToRemove] = useState<number[]>([]);
+  if (view === "detail" && detail) {
+    const poolAccounts = detail.accounts || [];
+    const otherAccounts = accounts.filter((a) => !poolAccounts.some((pa) => pa.id === a.id));
     return (
       <div className="animate-fade">
-        <PageHeader title={`مجموعة: ${pool.name}`} icon={<LayersIcon className="h-5 w-5" />} />
+        <PageHeader title={`مجموعة: ${detail.name}`} icon={<LayersIcon className="h-5 w-5" />} />
         <div className="space-y-4">
           <div className="card p-5">
             <div className="mb-3 flex flex-wrap gap-2 text-xs text-surface-500">
-              <span>الاسم: {pool.name}</span>
-              <span>الغرض: {pool.purpose}</span>
-              <span>الحسابات: {pool.count}</span>
+              <span>الاسم: {detail.name}</span>
+              <span>الغرض: {detail.purpose}</span>
+              <span>الحسابات: {poolAccounts.length}</span>
+              {detail.description && <span>الوصف: {detail.description}</span>}
             </div>
-            <Table columns={["#","اسم","هاتف","حالة"]} rows={poolAccounts.map((a,i)=>[
-              String(i+1), a.name, a.phone, <StatusChip status={a.status} />
+            <Table columns={["#", "اسم", "هاتف", "حالة", "إزالة"]} rows={poolAccounts.map((a, i) => [
+              String(i + 1), a.name, a.phone,
+              <StatusChip key={a.id} status={a.status} />,
+              <Button key={`r${a.id}`} variant="danger" onClick={async () => {
+                try {
+                  await apiFetch(`/accounts/${a.id}/pool`, { method: "DELETE" });
+                  setDetail(await apiFetch<AccountPool>(`/accounts/pools/${detail.id}`));
+                } catch (err) { show(err instanceof Error ? err.message : "تعذر الإزالة", "danger"); }
+              }}>إزالة</Button>,
             ])} />
+            {poolAccounts.length === 0 && <p className="py-4 text-center text-sm text-surface-500">لا توجد حسابات في المجموعة بعد.</p>}
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Button className="w-full" onClick={() => setAddMode(!addMode)}>➕ إضافة حسابات للمجموعة</Button>
-            <Button className="w-full" onClick={() => show("تم تعديل المجموعة")}>✏️ تعديل الاسم/الغرض</Button>
             <Button variant="danger" className="w-full" onClick={() => setConfirmDel(true)}>🗑️ حذف المجموعة</Button>
+            <Button className="w-full" onClick={() => { setView("list"); setDetail(null); }}>🔙 رجوع</Button>
           </div>
           {addMode && (
-            <div className="card p-4 space-y-2">
+            <div className="card p-4 space-y-3">
               <SectionTitle>اختر الحسابات للإضافة</SectionTitle>
-              {allAccounts.slice(pool.count).map((a) => (
-                <Checkbox key={a.id} label={`${a.name} — ${a.phone}`}
-                  checked={toAdd.includes(a.id)}
-                  onChange={() => setToAdd((s)=>s.includes(a.id)?s.filter(x=>x!==a.id):[...s,a.id])} />
-              ))}
-              <Button variant="primary" disabled={toAdd.length===0} onClick={() => { show(`تم إضافة ${toAdd.length} حساب`); setAddMode(false); setToAdd([]); }}>✅ إضافة المحدد</Button>
+              {otherAccounts.length === 0 && <p className="text-sm text-surface-500">جميع الحسابات في المجموعة بالفعل.</p>}
+              <div className="max-h-64 space-y-2 overflow-auto">
+                {otherAccounts.map((a) => (
+                  <Checkbox key={a.id} label={`${a.name} — ${a.phone}`}
+                    checked={toAdd.includes(a.id)}
+                    onChange={() => setToAdd((s) => s.includes(a.id) ? s.filter((x) => x !== a.id) : [...s, a.id])} />
+                ))}
+              </div>
+              <Button variant="primary" disabled={!toAdd.length} onClick={() => void assignSelected()}>✅ تأكيد الإضافة</Button>
             </div>
           )}
-          <Button onClick={() => setView("list")}>🔙 رجوع</Button>
         </div>
-        <ConfirmDialog open={confirmDel} danger title="حذف المجموعة" message={`سيتم حذف مجموعة "${pool.name}" نهائياً.`}
-          onConfirm={() => { setConfirmDel(false); show("تم حذف المجموعة"); setView("list"); }}
-          onCancel={() => setConfirmDel(false)} />
+        <ConfirmDialog open={confirmDel} title="حذف المجموعة" message={`سيتم حذف مجموعة ${detail.name} وإزالة حساباتها منها (لن تُحذف الحسابات).`} confirmLabel="حذف" onConfirm={() => void deletePool()} onCancel={() => setConfirmDel(false)} danger />
         {node}
       </div>
     );
@@ -1178,20 +1276,28 @@ function AccountPools() {
 
   return (
     <div className="animate-fade">
-      <PageHeader title="مجموعات الحسابات (Account Pools)" icon={<LayersIcon className="h-5 w-5" />} />
-      <div className="space-y-4">
-        <Button variant="primary" onClick={() => setView("create")}>➕ إنشاء مجموعة جديدة</Button>
-        <Table columns={["اسم","عدد","نشط","الغرض",""]} rows={mockPools.map((p) => [
-          p.name, String(p.count), String(p.active), p.purpose,
-          <Button onClick={() => { setSelectedPool(p.name); setView("detail"); }}>إدارة</Button>,
-        ])} />
-      </div>
+      <PageHeader title="مجموعات الحسابات (Pools)" subtitle="تجميع الحسابات وتوزيعها على الأغراض" icon={<LayersIcon className="h-5 w-5" />} />
+      <Button variant="primary" className="mb-4" icon={<Plus className="h-4 w-4" />} onClick={() => setView("create")}>➕ إنشاء مجموعة جديدة</Button>
+      {loading ? <Spinner label="جاري تحميل المجموعات..." /> : pools.length === 0 ? (
+        <EmptyState icon={<LayersIcon className="h-8 w-8" />} title="لا توجد مجموعات بعد" desc="أنشئ مجموعة لتنظيم حساباتك حسب الغرض." />
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {pools.map((pool) => (
+            <button key={pool.id} onClick={() => void openDetail(pool.id)} className="card flex items-center justify-between p-4 text-right transition hover:-translate-y-0.5 hover:shadow-pop">
+              <div>
+                <div className="text-sm font-bold text-surface-800">{pool.name}</div>
+                <div className="mt-1 text-xs text-surface-500">{pool.purpose} — حساب واحد أو أكثر</div>
+              </div>
+              <LayersIcon className="h-5 w-5 text-accent-500" />
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="mt-4"><Button onClick={() => push(["accounts"])}>رجوع</Button></div>
       {node}
     </div>
   );
 }
-
-/* ── HealthScore ── */
 
 function IndividualSettings() {
   const { show, node } = useToast();
@@ -1261,7 +1367,7 @@ function IndividualSettings() {
           )}
         </div>
         <div className="flex gap-2">
-          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key: `account_limit_add_${selected}`, value: addLimit, is_secret: false, description: "account add limit" }] }) }).then(() => show("💾 تم حفظ الإعدادات")).catch(() => show("💾 تم الحفظ محلياً")); setSelected(null); }}>💾 حفظ الإعدادات</Button>
+          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key: `account_limit_add_${selected}`, value: addLimit, is_secret: false, description: "account add limit" }] }) }).then(() => show("💾 تم حفظ الإعدادات")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); setSelected(null); }}>💾 حفظ الإعدادات</Button>
           <Button onClick={() => setSelected(null)}>🔙 رجوع</Button>
         </div>
       </div>
@@ -1274,41 +1380,105 @@ function IndividualSettings() {
 function ProfileManager() {
   const { show, node } = useToast();
   const allAccounts = useAccounts();
-  const [mode, setMode] = useState<"list"|"single"|"bulk">("list");
-  const [selected, setSelected] = useState<number|null>(null);
+  const [mode, setMode] = useState<"list" | "single" | "bulk">("list");
+  const [selected, setSelected] = useState<number | null>(null);
   const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName]   = useState("");
-  const [uname, setUname]         = useState("");
-  const [bio, setBio]             = useState("");
-  const [saving, setSaving]       = useState(false);
+  const [lastName, setLastName] = useState("");
+  const [uname, setUname] = useState("");
+  const [bio, setBio] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const photoRef = useRef<HTMLInputElement>(null);
   const [bulkSelected, setBulkSelected] = useState<number[]>([]);
-  const [bulkChanges, setBulkChanges] = useState({ photos:false, names:false, bio:false });
-  const [photoDir, setPhotoDir]   = useState("/photos/");
-  const [namesFile, setNamesFile] = useState("/names.txt");
-  const [bioFile, setBioFile]     = useState("/bios.txt");
+  const [bulkChanges, setBulkChanges] = useState({ photos: false, names: false, bio: false });
+  const [namesText, setNamesText] = useState("");
+  const [biosText, setBiosText] = useState("");
   const [bulkRunning, setBulkRunning] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState(0);
+  const [bulkJobId, setBulkJobId] = useState<string | null>(null);
+
+  const saveSingle = async () => {
+    if (selected === null) return;
+    setSaving(true);
+    try {
+      await apiFetch(`/accounts/${selected}/profile`, {
+        method: "PUT",
+        body: JSON.stringify({ first_name: firstName || null, last_name: lastName || null, username: uname || null, bio: bio || null }),
+      });
+      if (photoFile) {
+        const form = new FormData();
+        form.append("file", photoFile);
+        await apiFetch(`/accounts/${selected}/profile/photo`, { method: "POST", body: form });
+      }
+      show("✅ تم تحديث الملف الشخصي على تيليجرام فعلياً");
+      setMode("list");
+      setPhotoFile(null);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر التحديث — تحقق من الجلسة", "danger");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const startBulk = async () => {
+    if (!bulkSelected.length) {
+      show("اختر حساباً واحداً على الأقل", "danger");
+      return;
+    }
+    setBulkRunning(true);
+    setBulkJobId(null);
+    try {
+      // Upload names/bios files first, then reference them
+      let namesUploaded: string | null = null;
+      let biosUploaded: string | null = null;
+      if (bulkChanges.names && namesText.trim()) {
+        const blob = new Blob([namesText], { type: "text/plain" });
+        const form = new FormData();
+        form.append("file", blob, "names.txt");
+        const uploaded = await apiFetch<{ id: number; original_name: string }>("/uploads", { method: "POST", body: form });
+        namesUploaded = uploaded.original_name;
+      }
+      if (bulkChanges.bio && biosText.trim()) {
+        const blob = new Blob([biosText], { type: "text/plain" });
+        const form = new FormData();
+        form.append("file", blob, "bios.txt");
+        const uploaded = await apiFetch<{ id: number; original_name: string }>("/uploads", { method: "POST", body: form });
+        biosUploaded = uploaded.original_name;
+      }
+      const response = await apiFetch<JobStartResponse>("/accounts/profile/bulk", {
+        method: "POST",
+        body: JSON.stringify({
+          account_ids: bulkSelected,
+          names_file: namesUploaded,
+          bios_file: biosUploaded,
+          photos_dir: bulkChanges.photos ? "/photos" : null,
+        }),
+      });
+      setBulkJobId(response.job_id || null);
+    } catch (err) {
+      setBulkRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء التعديل الجماعي", "danger");
+    }
+  };
 
   if (mode === "single" && selected !== null) {
-    const acc = allAccounts.find(a=>a.id===selected)!;
+    const acc = allAccounts.find((a) => a.id === selected);
+    if (!acc) return <div className="card p-5 text-sm text-surface-500">الحساب غير موجود</div>;
     return (
       <div className="animate-fade">
         <PageHeader title={`تعديل ملف: ${acc.name}`} icon={<Image className="h-5 w-5" />} />
         <div className="mx-auto max-w-lg card p-6 space-y-3">
           <SectionTitle>📸 صورة الملف الشخصي</SectionTitle>
-          <div className="grid grid-cols-3 gap-2">
-            <Button onClick={() => show("رفع صورة")}>📁 رفع صورة</Button>
-            <Button onClick={() => show("مجلد صور")}>📂 من مجلد</Button>
-            <Button variant="danger" onClick={() => show("تم حذف الصورة")}>❌ حذف الصورة</Button>
-          </div>
-          <Field label="✏️ الاسم الأول"    placeholder="الاسم"     value={firstName} onChange={setFirstName} />
-          <Field label="✏️ اسم العائلة"   placeholder="العائلة"   value={lastName}  onChange={setLastName} />
-          <Field label="✏️ @username"      placeholder="@username" value={uname}     onChange={setUname} />
-          <Field label="✏️ السيرة الذاتية (Bio)" placeholder="Bio..." value={bio}  onChange={setBio} />
+          <input ref={photoRef} type="file" accept="image/*" className="hidden" onChange={(e) => setPhotoFile(e.target.files?.[0] || null)} />
+          <Button variant="primary" className="w-full" onClick={() => photoRef.current?.click()}>
+            {photoFile ? `تم اختيار: ${photoFile.name}` : "📁 رفع صورة جديدة"}
+          </Button>
+          <Field label="✏️ الاسم الأول" placeholder="الاسم" value={firstName} onChange={setFirstName} />
+          <Field label="✏️ اسم العائلة" placeholder="العائلة" value={lastName} onChange={setLastName} />
+          <Field label="✏️ @username" placeholder="@username" value={uname} onChange={setUname} />
+          <Field label="✏️ السيرة الذاتية (Bio)" placeholder="Bio..." value={bio} onChange={setBio} />
           <div className="flex gap-2 pt-2">
-            <Button variant="primary" className="flex-1" disabled={saving}
-              onClick={() => { setSaving(true); setTimeout(()=>{ setSaving(false); show("✅ تم التعديل بنجاح"); setMode("list"); },1500); }}>
-              {saving ? "⏳ جاري التطبيق..." : "💾 حفظ التعديلات"}
+            <Button variant="primary" className="flex-1" disabled={saving} onClick={() => void saveSingle()}>
+              {saving ? "⏳ جاري التطبيق على تيليجرام..." : "💾 حفظ التعديلات"}
             </Button>
             <Button onClick={() => setMode("list")}>🔙 رجوع</Button>
           </div>
@@ -1324,27 +1494,28 @@ function ProfileManager() {
         <PageHeader title="تعديل جماعي (Bulk Profile Edit)" icon={<Image className="h-5 w-5" />} />
         <div className="card p-5 space-y-3">
           <SectionTitle>اختر الحسابات</SectionTitle>
-          {allAccounts.map((a) => (
-            <Checkbox key={a.id} label={`${a.name} — ${a.phone}`}
-              checked={bulkSelected.includes(a.id)}
-              onChange={() => setBulkSelected(s=>s.includes(a.id)?s.filter(x=>x!==a.id):[...s,a.id])} />
-          ))}
+          <div className="max-h-56 space-y-2 overflow-auto">
+            {allAccounts.map((a) => (
+              <Checkbox key={a.id} label={`${a.name} — ${a.phone}`}
+                checked={bulkSelected.includes(a.id)}
+                onChange={() => setBulkSelected((s) => s.includes(a.id) ? s.filter((x) => x !== a.id) : [...s, a.id])} />
+            ))}
+          </div>
           <SectionTitle>ماذا تريد تغيير</SectionTitle>
-          <Checkbox label="تغيير الصور (من مجلد عشوائي)" checked={bulkChanges.photos} onChange={(v)=>setBulkChanges({...bulkChanges,photos:v})} />
-          {bulkChanges.photos && <InlineEdit label="مسار مجلد الصور" value={photoDir} onSave={setPhotoDir} placeholder="/photos/" />}
-          <Checkbox label="تغيير الأسماء (من قائمة)"       checked={bulkChanges.names}  onChange={(v)=>setBulkChanges({...bulkChanges,names:v})} />
-          {bulkChanges.names && <InlineEdit label="مسار ملف الأسماء" value={namesFile} onSave={setNamesFile} placeholder="/names.txt" />}
-          <Checkbox label="تغيير البيو (من قائمة)"          checked={bulkChanges.bio}    onChange={(v)=>setBulkChanges({...bulkChanges,bio:v})} />
-          {bulkChanges.bio && <InlineEdit label="مسار ملف البيو" value={bioFile} onSave={setBioFile} placeholder="/bios.txt" />}
-          {!bulkRunning && bulkProgress===0 && (
-            <Button variant="primary" className="w-full" disabled={bulkSelected.length===0}
-              onClick={() => { setBulkRunning(true); const t=setInterval(()=>{ setBulkProgress(p=>{ if(p>=100){clearInterval(t);setBulkRunning(false);return 100;}return p+10; }); },150); }}>
-              ✅ بدء التعديل الجماعي
-            </Button>
-          )}
-          {bulkRunning && <Progress value={bulkProgress} label="🖼️ جاري التعديل..." sub={`${bulkProgress}%`} tone="accent" />}
-          {bulkProgress===100 && <Alert tone="success" title="✅ اكتمل التعديل الجماعي" />}
-          {!bulkRunning && <Button onClick={() => setMode("list")}>❌ إلغاء</Button>}
+          <Checkbox label="تغيير الأسماء (سطر لكل حساب بالترتيب)" checked={bulkChanges.names} onChange={(v) => setBulkChanges({ ...bulkChanges, names: v })} />
+          {bulkChanges.names && <TextArea label="الأسماء (سطر لكل حساب)" rows={3} value={namesText} onChange={setNamesText} />}
+          <Checkbox label="تغيير البيو (سطر لكل حساب)" checked={bulkChanges.bio} onChange={(v) => setBulkChanges({ ...bulkChanges, bio: v })} />
+          {bulkChanges.bio && <TextArea label="البايو (سطر لكل حساب)" rows={3} value={biosText} onChange={setBiosText} />}
+          <Checkbox label="تغيير الصور (من مجلد /photos على السيرفر)" checked={bulkChanges.photos} onChange={(v) => setBulkChanges({ ...bulkChanges, photos: v })} />
+          <Button variant="primary" className="w-full" disabled={bulkRunning} onClick={() => void startBulk()}>
+            {bulkRunning ? "جاري التعديل..." : "✅ بدء التعديل الجماعي"}
+          </Button>
+          <JobProgressCard jobId={bulkJobId} onDone={(run) => {
+            setBulkRunning(false);
+            if (run.status === "failed") show(run.error?.split("\n")[0] || "فشل التعديل الجماعي", "danger");
+            else show("✅ اكتمل التعديل الجماعي");
+          }} />
+          <Button onClick={() => setMode("list")}>❌ إلغاء</Button>
         </div>
         {node}
       </div>
@@ -1353,12 +1524,12 @@ function ProfileManager() {
 
   return (
     <div className="animate-fade">
-      <PageHeader title="إدارة ملفات الشخصية (Profile Manager)" icon={<Image className="h-5 w-5" />} />
+      <PageHeader title="إدارة ملفات الشخصية (Profile Manager)" subtitle="تعديل حقيقي عبر تيليجرام" icon={<Image className="h-5 w-5" />} />
       <div className="space-y-3">
         <Button variant="primary" onClick={() => setMode("bulk")}>🔀 تعديل جماعي</Button>
-        <Table columns={["اسم","هاتف","username",""]} rows={allAccounts.map((a) => [
-          a.name, a.phone, a.username,
-          <Button onClick={() => { setSelected(a.id); setMode("single"); }}>✏️ تعديل</Button>,
+        <Table columns={["اسم", "هاتف", "username", ""]} rows={allAccounts.map((a) => [
+          a.name, a.phone, a.username || "—",
+          <Button key={a.id} onClick={() => { setSelected(a.id); setMode("single"); }}>✏️ تعديل</Button>,
         ])} />
       </div>
       {node}
@@ -1366,71 +1537,105 @@ function ProfileManager() {
   );
 }
 
-/* ── ActivityLog ── */
-
 function AccountSecurity() {
   const { show, node } = useToast();
   const allAccounts = useAccounts();
-  const [tab, setTab]       = useState<"scan"|"sessions"|"2fa">("scan");
-  const [scanning, setScanning] = useState(false);
-  const [scanDone, setScanDone] = useState(false);
-  const [selectedAcc, setSelectedAcc] = useState<number|null>(null);
+  const [tab, setTab] = useState<"scan" | "sessions" | "2fa">("sessions");
+  const [selectedAcc, setSelectedAcc] = useState<number | null>(null);
+  const [devices, setDevices] = useState<Array<{ hash: string; device: string; app: string; ip: string; last_active: string; current?: boolean }>>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
   const [curPass, setCurPass] = useState("");
   const [newPass, setNewPass] = useState("");
   const [confPass, setConfPass] = useState("");
-  const [saving, setSaving]   = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const loadDevices = async (accountId: number) => {
+    setDevicesLoading(true);
+    setDevices([]);
+    try {
+      const rows = await apiFetch<Array<{ hash: string; device: string; app: string; ip: string; last_active: string; current?: boolean }>>(`/accounts/${accountId}/telegram-sessions`);
+      setDevices(rows);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر جلب الأجهزة — تحقق من الجلسة وضبط API", "danger");
+    } finally {
+      setDevicesLoading(false);
+    }
+  };
+
+  const terminate = async (hash: string) => {
+    if (selectedAcc === null) return;
+    try {
+      await apiFetch(`/accounts/${selectedAcc}/telegram-sessions/terminate`, { method: "POST", body: JSON.stringify({ hash }) });
+      show("✅ تم إنهاء الجلسة على تيليجرام");
+      await loadDevices(selectedAcc);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر إنهاء الجلسة", "danger");
+    }
+  };
+
+  const terminateOthers = async () => {
+    if (selectedAcc === null) return;
+    try {
+      await apiFetch(`/accounts/${selectedAcc}/telegram-sessions/terminate`, { method: "POST", body: JSON.stringify({ all_others: true }) });
+      show("✅ تم إنهاء جميع الجلسات الأخرى");
+      await loadDevices(selectedAcc);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر إنهاء الجلسات", "danger");
+    }
+  };
+
+  const change2FA = async (applyToAll: boolean) => {
+    if (selectedAcc === null && !applyToAll) return;
+    if (!newPass || newPass !== confPass) {
+      show("كلمتا المرور غير متطابقتين", "danger");
+      return;
+    }
+    setSaving(true);
+    try {
+      await apiFetch("/security/2fa", {
+        method: "PUT",
+        body: JSON.stringify({ account_id: selectedAcc ?? 1, current_password: curPass || null, new_password: newPass, apply_to_all: applyToAll }),
+      });
+      show(applyToAll ? "✅ تم تطبيق 2FA على جميع الحسابات (لا تُخزن كلمة المرور)" : "✅ تم تغيير 2FA على تيليجرام فعلياً (لا تُخزن كلمة المرور)");
+      setCurPass(""); setNewPass(""); setConfPass("");
+      setSelectedAcc(null);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "فشل تغيير 2FA — تحقق من كلمة المرور الحالية", "danger");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="animate-fade">
-      <PageHeader title="أمان الحسابات (Account Security)" icon={<Lock className="h-5 w-5" />} />
+      <PageHeader title="أمان الحسابات (Account Security)" subtitle="جلسات حقيقية و 2FA عبر تيليجرام" icon={<Lock className="h-5 w-5" />} />
       <div className="space-y-4">
-        <Tabs tabs={[{id:"scan",label:"🛡️ فحص أمان"},{id:"sessions",label:"📱 الأجهزة"},{id:"2fa",label:"🔐 2FA"}]}
-          active={tab} onChange={(v)=>setTab(v as typeof tab)} />
-
-        {tab === "scan" && (
-          <div className="card p-5 space-y-4">
-            {!scanning && !scanDone && (
-              <Button variant="primary" className="w-full" onClick={() => { setScanning(true); setTimeout(()=>{ setScanning(false); setScanDone(true); },2000); }}>
-                🛡️ بدء فحص أمان شامل
-              </Button>
-            )}
-            {scanning && (
-              <div>
-                <Progress value={70} label="🔍 جاري الفحص..." sub="70%" tone="accent" />
-                <p className="mt-2 text-xs text-surface-500">يفحص: الجلسة | النشاط المشبوه | تسجيلات الدخول</p>
-              </div>
-            )}
-            {scanDone && (
-              <div className="space-y-3">
-                <Table columns={["حساب","نتيجة","الجلسة","التوصية"]} rows={[
-                  ["+966501234567","✅ آمن","سليمة","—"],
-                  ["+966552345678","⚠️ مشبوه","نشاط غير معتاد","مراجعة"],
-                  ["+966563456789","✅ آمن","سليمة","—"],
-                ]} />
-                <Button onClick={() => show("تم تصدير التقرير")}>📊 عرض التقرير المفصل</Button>
-              </div>
-            )}
-          </div>
-        )}
+        <Tabs tabs={[{ id: "sessions", label: "📱 الأجهزة المتصلة" }, { id: "2fa", label: "🔐 2FA" }]}
+          active={tab} onChange={(v) => setTab(v as typeof tab)} />
 
         {tab === "sessions" && (
           <div className="space-y-3">
             {selectedAcc === null ? (
               <div className="card p-4 space-y-2">
-                <SectionTitle>اختر حساباً</SectionTitle>
+                <SectionTitle>اختر حساباً لعرض أجهزته الحقيقية</SectionTitle>
                 {allAccounts.map((a) => (
-                  <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} onClick={() => setSelectedAcc(a.id)} />
+                  <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} onClick={() => { setSelectedAcc(a.id); void loadDevices(a.id); }} />
                 ))}
               </div>
             ) : (
               <div className="card p-5 space-y-3">
-                <SectionTitle>📱 الأجهزة المتصلة حالياً</SectionTitle>
-                <Table columns={["جهاز","تطبيق","IP","آخر نشاط",""]} rows={[
-                  ["iPhone 15","Telegram 10.0","185.12.45.10","الآن",     <Button variant="danger" onClick={()=>show("تم الإنهاء")}>❌ إنهاء</Button>],
-                  ["Samsung S23","Telegram 9.8","94.21.10.5", "قبل ساعة", <Button variant="danger" onClick={()=>show("تم الإنهاء")}>❌ إنهاء</Button>],
-                ]} />
+                <SectionTitle>📱 الأجهزة المتصلة حالياً ({allAccounts.find((a) => a.id === selectedAcc)?.phone})</SectionTitle>
+                {devicesLoading ? <Spinner label="جاري جلب الجلسات من تيليجرام..." /> : devices.length === 0 ? (
+                  <EmptyState title="لا توجد جلسات معروضة" desc="قد تكون الجلسة غير صالحة أو تعذر الاتصال." />
+                ) : (
+                  <Table columns={["جهاز", "تطبيق", "IP", "آخر نشاط", "حالية", ""]} rows={devices.map((d) => [
+                    d.device, d.app, d.ip, d.last_active,
+                    d.current ? "نعم" : "—",
+                    <Button key={d.hash} variant="danger" disabled={!!d.current} onClick={() => void terminate(d.hash)}>❌ إنهاء</Button>,
+                  ])} />
+                )}
                 <div className="flex gap-2">
-                  <Button variant="danger" className="flex-1" onClick={() => show("تم إنهاء جميع الجلسات")}>❌ إنهاء جميع الجلسات (عدا الحالية)</Button>
+                  <Button variant="danger" className="flex-1" onClick={() => void terminateOthers()}>❌ إنهاء جميع الجلسات (عدا الحالية)</Button>
                   <Button onClick={() => setSelectedAcc(null)}>🔙 رجوع</Button>
                 </div>
               </div>
@@ -1440,28 +1645,26 @@ function AccountSecurity() {
 
         {tab === "2fa" && (
           <div className="space-y-3">
-            {selectedAcc === null ? (
-              <div className="card p-4 space-y-2">
-                <SectionTitle>اختر حساباً</SectionTitle>
+            <div className="card p-5 space-y-3">
+              <SectionTitle>🔐 تغيير كلمة مرور 2FA</SectionTitle>
+              <div className="space-y-2">
                 {allAccounts.map((a) => (
-                  <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} onClick={() => setSelectedAcc(a.id)} />
+                  <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} selected={selectedAcc === a.id} onClick={() => setSelectedAcc(a.id)} />
                 ))}
               </div>
-            ) : (
-              <div className="card p-5 space-y-3">
-                <SectionTitle>🔐 تحديث كلمة مرور 2FA</SectionTitle>
-                <Field label="كلمة المرور الحالية"   type="password" placeholder="••••••••" value={curPass} onChange={setCurPass} />
-                <Field label="كلمة المرور الجديدة"   type="password" placeholder="••••••••" value={newPass} onChange={setNewPass} />
-                <Field label="تأكيد كلمة المرور الجديدة" type="password" placeholder="••••••••" value={confPass} onChange={setConfPass} />
-                <div className="flex gap-2">
-                  <Button variant="primary" className="flex-1" disabled={saving||!curPass||!newPass||newPass!==confPass}
-                    onClick={() => { setSaving(true); apiFetch("/security/2fa", { method: "PUT", body: JSON.stringify({ account_id: selectedAcc, current_password: curPass, new_password: newPass }) }).then(() => show("✅ تم تغيير كلمة المرور")).catch(() => show("✅ تم التغيير محلياً")).finally(() => { setSaving(false); setSelectedAcc(null); setCurPass(""); setNewPass(""); setConfPass(""); }); }}>
-                    {saving ? "⏳ جاري التغيير..." : "💾 تطبيق التغيير"}
-                  </Button>
-                  <Button onClick={() => setSelectedAcc(null)}>🔙 رجوع</Button>
-                </div>
+              <Field label="كلمة المرور الحالية (إن وُجدت)" type="password" placeholder="••••••••" value={curPass} onChange={setCurPass} />
+              <Field label="كلمة المرور الجديدة" type="password" placeholder="••••••••" value={newPass} onChange={setNewPass} />
+              <Field label="تأكيد كلمة المرور الجديدة" type="password" placeholder="••••••••" value={confPass} onChange={setConfPass} />
+              <div className="flex flex-wrap gap-2">
+                <Button variant="primary" disabled={saving || selectedAcc === null || !newPass} onClick={() => void change2FA(false)}>
+                  {saving ? "⏳ جاري التغيير..." : "💾 تطبيق على الحساب المحدد"}
+                </Button>
+                <Button variant="warn" disabled={saving || !newPass} onClick={() => void change2FA(true)}>
+                  🔀 تطبيق جماعي على جميع الحسابات
+                </Button>
               </div>
-            )}
+              <Alert tone="info" title="خصوصية">كلمة المرور تُرسل لتغييرها عبر تيليجرام ولا تُخزَّن في قاعدة البيانات إطلاقاً.</Alert>
+            </div>
           </div>
         )}
       </div>

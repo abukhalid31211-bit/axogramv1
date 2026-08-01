@@ -12,6 +12,7 @@ import {
   ConfirmDialog,
   useToast,
   StatusChip,
+  TextArea,
   InlineEdit,
   Spinner,
   EmptyState,
@@ -19,6 +20,7 @@ import {
   StatCard,
   Checkbox,
 } from "../ui";
+import { JobProgressCard } from "../lib/job";
 import { apiFetch, type AccountRecord, type ProxyPoolRecord, type ProxyRecord, type ProxyStats } from "../lib/api";
 
 const items = [
@@ -285,20 +287,40 @@ function ListProxy() {
 }
 
 function ValidateProxy() {
+  const { push } = useNav();
+  const { show, node } = useToast();
   const [rows, setRows] = useState<ProxyRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<any>(null);
 
-  useEffect(() => {
-    apiFetch<ProxyRecord[]>("/proxies").then(setRows).finally(() => setLoading(false));
-  }, []);
+  const load = () => apiFetch<ProxyRecord[]>("/proxies").then(setRows).catch(() => undefined).finally(() => setLoading(false));
+  useEffect(() => { void load(); }, []);
 
   const active = rows.filter((p) => p.status === "active").length;
   const dead = rows.filter((p) => p.status === "dead").length;
   const slow = rows.filter((p) => p.status === "slow").length;
 
+  const startValidate = async (selectedOnly: boolean) => {
+    setRunning(true);
+    setResult(null);
+    try {
+      const response = await apiFetch<{ job_id: string }>("/proxies/validate", {
+        method: "POST",
+        body: JSON.stringify({ proxy_ids: selectedOnly ? selected : [] }),
+      });
+      setJobId(response.job_id);
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء الفحص", "danger");
+    }
+  };
+
   return (
     <div className="animate-fade">
-      <PageHeader title="التحقق من الصحة" icon={<ShieldCheck className="h-5 w-5" />} />
+      <PageHeader title="التحقق من الصحة" subtitle="فحص اتصال حقيقي (TCP/SOCKS/HTTP) لكل بروكسي" icon={<ShieldCheck className="h-5 w-5" />} />
       {loading ? <Spinner label="جاري قراءة البروكسيات..." /> : (
         <div className="mx-auto max-w-3xl space-y-4">
           <div className="flex flex-wrap gap-2">
@@ -306,9 +328,34 @@ function ValidateProxy() {
             <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">ميت: {dead}</span>
             <span className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">بطيء: {slow}</span>
           </div>
-          <Table columns={["IP:PORT", "نوع", "سرعة", "الحالة"]} rows={rows.map((proxy) => [proxy.address, proxy.proxy_type, proxy.speed_ms ? `${proxy.speed_ms}ms` : "—", <StatusChip status={proxy.status} />])} />
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => setSelected(rows.map((r) => r.id))}>تحديد الكل</Button>
+            <Button onClick={() => setSelected([])}>إلغاء الكل</Button>
+            <Button variant="primary" disabled={running} onClick={() => void startValidate(false)}>{running ? "جاري الفحص..." : "فحص جميع البروكسيهات"}</Button>
+            <Button disabled={running || selected.length === 0} onClick={() => void startValidate(true)}>فحص المحدد ({selected.length})</Button>
+          </div>
+          <JobProgressCard jobId={jobId} onDone={(run) => {
+            setRunning(false);
+            if (run.status === "failed") { show(run.error?.split("\n")[0] || "فشل الفحص", "danger"); return; }
+            try {
+              const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+              if (parsed) {
+                setResult(parsed);
+                show(`✅ اكتمل الفحص: ${parsed.summary.active} نشط | ${parsed.summary.slow} بطيء | ${parsed.summary.dead} ميت`);
+                void load();
+              }
+            } catch { /* ignore */ }
+          }} />
+          <Table columns={["", "IP:PORT", "نوع", "سرعة", "الحالة", "ملاحظة"]} rows={rows.map((proxy) => [
+            <input key={`c${proxy.id}`} type="checkbox" checked={selected.includes(proxy.id)} onChange={() => setSelected((s) => s.includes(proxy.id) ? s.filter((x) => x !== proxy.id) : [...s, proxy.id])} className="h-4 w-4 accent-brand-600" />,
+            proxy.address, proxy.proxy_type, proxy.speed_ms ? `${proxy.speed_ms}ms` : "—",
+            <StatusChip key={`s${proxy.id}`} status={proxy.status} />,
+            proxy.notes || "—",
+          ])} />
         </div>
       )}
+      <div className="mt-4"><Button onClick={() => push(["proxy"])}>رجوع</Button></div>
+      {node}
     </div>
   );
 }
@@ -566,20 +613,58 @@ function ProxyPools() {
 function ReplaceDead() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const [candidates, setCandidates] = useState("");
   const [running, setRunning] = useState(false);
-  const [done, setDone] = useState(false);
-  const [result, setResult] = useState<{ replaced: number; remaining_without: number } | null>(null);
-  const run = () => { setRunning(true); apiFetch<{ replaced: number; remaining_without: number }>("/proxies/replace-dead", { method: "POST", body: JSON.stringify({}) }).then((r) => { setResult(r); setDone(true); show(`تم استبدال ${r.replaced} بروكسي`); }).catch(() => { setDone(true); setResult(null); show("تم الاستبدال محلياً"); }).finally(() => setRunning(false)); };
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<any>(null);
+
+  const start = async () => {
+    setRunning(true);
+    setResult(null);
+    try {
+      const lines = candidates.split("\n").map((l) => l.trim()).filter(Boolean);
+      const response = await apiFetch<{ job_id: string }>("/proxies/replace-dead", {
+        method: "POST",
+        body: JSON.stringify({ candidates: lines }),
+      });
+      setJobId(response.job_id);
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر البدء", "danger");
+    }
+  };
+
   return (
     <div className="animate-fade">
-      <PageHeader title="استبدال البروكسيهات الميتة" icon={<RefreshCw className="h-5 w-5" />} />
+      <PageHeader title="استبدال البروكسيهات الميتة" subtitle="فحص حقيقي للميتة والمرشحين واستبدالها" icon={<Zap className="h-5 w-5" />} />
       <div className="mx-auto max-w-2xl card p-6 space-y-4">
-        <Alert tone="warn" title="استبدال البروكسيهات الميتة تلقائياً ببدائل نشطة" />
-        {!running && !done && <Button variant="primary" className="w-full" onClick={run}>⭐ استبدال تلقائي بأفضل بديل</Button>}
-        {running && <Progress value={75} label="جاري الاستبدال..." sub="75%" tone="accent" />}
-        {done && result && <Alert tone="success" title={`اكتمل الاستبدال: ${result.replaced}`} />}
-        <Button onClick={() => push(["proxy"])}>رجوع</Button>
+        <TextArea label="بروكسيهات مرشحة للاستبدال (address:type:login:password — اختياري، واحد per سطر)" rows={5} value={candidates} onChange={setCandidates} placeholder={"185.12.45.10:1080:SOCKS5\n77.40.22.8:1080"} />
+        <Button variant="primary" className="w-full" disabled={running} onClick={() => void start()}>
+          {running ? "جاري الفحص والاستبدال..." : "✅ بدء الاستبدال"}
+        </Button>
+        <JobProgressCard jobId={jobId} onDone={(run) => {
+          setRunning(false);
+          if (run.status === "failed") { show(run.error?.split("\n")[0] || "فشل الاستبدال", "danger"); return; }
+          try {
+            const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+            if (parsed) {
+              setResult(parsed);
+              show(`✅ تم استبدال ${parsed.replaced} بروكسي (بقي ${parsed.remaining_without} ميت)`);
+            }
+          } catch { /* ignore */ }
+        }} />
+        {result && (
+          <Alert tone="success" title="نتائج الاستبدال">
+            <div className="mt-1 text-xs space-y-1">
+              <div>تم استبدال: {result.replaced}</div>
+              <div>تم فحصها: {result.checked}</div>
+              <div>المتبقي بدون بروكسي: {result.remaining_without}</div>
+              {result.errors?.length > 0 && <div className="text-danger-600">أخطاء: {result.errors.slice(0, 5).join(" | ")}</div>}
+            </div>
+          </Alert>
+        )}
       </div>
+      <div className="mt-4"><Button onClick={() => push(["proxy"])}>رجوع</Button></div>
       {node}
     </div>
   );
@@ -639,7 +724,7 @@ function ExportProxies() {
   const { push } = useNav();
   const { show, node } = useToast();
   const [format, setFormat] = useState<"ipport"|"full"|"type"|"csv">("ipport");
-  const doExport = () => { apiFetch<{ content: string }>(`/proxies/export?format_value=${format}`).then((r) => { const blob = new Blob([r.content], { type: "text/plain;charset=utf-8" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `proxies.${format === "csv" ? "csv" : "txt"}`; a.click(); URL.revokeObjectURL(url); show("تم إنشاء الملف وتنزيله"); push(["proxy"]); }).catch(() => { show("تم التصدير محلياً"); push(["proxy"]); }); };
+  const doExport = () => { apiFetch<{ content: string }>(`/proxies/export?format_value=${format}`).then((r) => { const blob = new Blob([r.content], { type: "text/plain;charset=utf-8" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `proxies.${format === "csv" ? "csv" : "txt"}`; a.click(); URL.revokeObjectURL(url); show("تم إنشاء الملف وتنزيله"); push(["proxy"]); }).catch((err) => { show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger"); }); };
   return (
     <div className="animate-fade">
       <PageHeader title="تصدير قائمة البروكسيهات" icon={<Download className="h-5 w-5" />} />
@@ -681,7 +766,7 @@ function ProxyNotifications() {
         <Checkbox label="تنبيه عند نجاح/فشل التعيين التلقائي" checked={n.assign} onChange={() => toggle("assign")} />
       </div>
       <div className="mt-4 flex gap-2">
-        <Button variant="primary" onClick={() => { apiFetch("/proxies/notifications", { method: "PUT", body: JSON.stringify({ on_dead: n.dead, on_expiry: n.expiry, slow_ms_threshold: parseInt(ms || "400"), dead_percent_threshold: parseInt(pct || "50"), daily_report: n.daily, on_assign_result: n.assign }) }).then(() => { show("تم حفظ إعدادات الإشعارات"); push(["proxy"]); }).catch(() => { show("تم الحفظ محلياً"); push(["proxy"]); }); }}>💾 حفظ الإعدادات</Button>
+        <Button variant="primary" onClick={() => { apiFetch("/proxies/notifications", { method: "PUT", body: JSON.stringify({ on_dead: n.dead, on_expiry: n.expiry, slow_ms_threshold: parseInt(ms || "400"), dead_percent_threshold: parseInt(pct || "50"), daily_report: n.daily, on_assign_result: n.assign }) }).then(() => { show("تم حفظ إعدادات الإشعارات"); push(["proxy"]); }).catch((err) => { show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger"); }); }}>💾 حفظ الإعدادات</Button>
         <Button onClick={() => push(["proxy"])}>رجوع</Button>
       </div>
       {node}
@@ -713,7 +798,7 @@ function ProxyGeneralSettings() {
         <Checkbox label="استبدال تلقائي عند موت البروكسي" checked={autoReplace} onChange={() => setAutoReplace(!autoReplace)} />
         <Checkbox label="تدوير تلقائي دوري" checked={autoRotate} onChange={() => setAutoRotate(!autoRotate)} />
         <div className="flex gap-2 pt-2">
-          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/proxies/general", { method: "PUT", body: JSON.stringify({ timeout: parseInt(timeout || "10"), retries: parseInt(retries || "3"), retry_delay: parseInt(retryDelay || "5"), dns_over_proxy: dns, auto_check: autoCheck, auto_replace: autoReplace, auto_rotate: autoRotate }) }).then(() => { show("تم حفظ الإعدادات"); push(["proxy"]); }).catch(() => { show("تم الحفظ محلياً"); push(["proxy"]); }); }}>💾 حفظ الإعدادات</Button>
+          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/proxies/general", { method: "PUT", body: JSON.stringify({ timeout: parseInt(timeout || "10"), retries: parseInt(retries || "3"), retry_delay: parseInt(retryDelay || "5"), dns_over_proxy: dns, auto_check: autoCheck, auto_replace: autoReplace, auto_rotate: autoRotate }) }).then(() => { show("تم حفظ الإعدادات"); push(["proxy"]); }).catch((err) => { show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger"); }); }}>💾 حفظ الإعدادات</Button>
           <Button onClick={() => show("تمت إعادة الافتراضي")}>🔄 إعادة افتراضي</Button>
           <Button onClick={() => push(["proxy"])}>رجوع</Button>
         </div>

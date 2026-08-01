@@ -10,7 +10,6 @@ import {
   SectionTitle, Alert, useToast, EmptyState, InlineEdit, StatCard,
   SearchInput, Tabs, ConfirmDialog,
 } from "../ui";
-import { addLogs, exportedFiles, accounts, blacklist } from "../data";
 import {
   apiFetch,
   type AddOperationRecord,
@@ -91,7 +90,7 @@ function SRow({ label, value }: { label: string; value: string }) {
 }
 
 function useAccounts() {
-  const [rows, setRows] = useState<typeof accounts>(accounts);
+  const [rows, setRows] = useState<Array<{ id: number; name: string; phone: string; status: string }>>([]);
   useEffect(() => {
     apiFetch<{ id: number; name: string; phone: string; status: string }[]>("/accounts").then((r) => {
       setRows(r.map((a) => ({ id: a.id, name: a.name, phone: a.phone, username: "@" + a.name, status: a.status as any, proxy: "", lastUsed: "", age: "", groups: 0 })));
@@ -108,21 +107,6 @@ function useQueueHealth() {
       .catch(() => setQueueEnabled(false));
   }, []);
   return queueEnabled;
-}
-
-function fallbackExports(): GatherExportRecord[] {
-  return exportedFiles.map((file) => ({
-    id: file.id,
-    source_label: file.name,
-    source_type: "csv",
-    file_name: file.name,
-    file_path: file.name,
-    member_count: file.members,
-    status: "ready",
-    notes: null,
-    created_by: null,
-    created_at: `${file.date}T00:00:00Z`,
-  }));
 }
 
 /* ── shared running screen ── */
@@ -259,7 +243,7 @@ function AddRunning({ summary, onBack }: { summary: Record<string,string>; onBac
               <div className="flex justify-between"><span>⚠️ تخطي (خصوصية)</span><span className="font-bold text-warn-700">{Math.floor(progress*5)}</span></div>
               <div className="flex justify-between"><span>❌ فاشل</span><span className="font-bold text-danger-700">{Math.floor(progress*1.35)}</span></div>
             </div>
-            <Table columns={["حساب","أرسل","نجح","فشل","حالة"]} rows={accounts.slice(0,3).map(a=>[
+            <Table columns={["حساب","أرسل","نجح","فشل","حالة"]} rows={([] as Array<{phone:string}>).slice(0,3).map((a)=>[
               a.phone,
               String(Math.floor(progress*0.5)),
               String(Math.floor(progress*0.45)),
@@ -279,7 +263,7 @@ function AddFromCsv() {
   const { push } = useNav();
   const { show, node } = useToast();
   const queueEnabled = useQueueHealth();
-  const [exportsRows, setExportsRows] = useState<GatherExportRecord[]>(fallbackExports());
+  const [exportsRows, setExportsRows] = useState<GatherExportRecord[]>([]);
   const [step, setStep]   = useState(0);
   const [file, setFile]   = useState<number|null>(null);
   const [target, setTarget] = useState("@my_group");
@@ -305,7 +289,7 @@ function AddFromCsv() {
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
-    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => setExportsRows(fallbackExports()));
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => setExportsRows([]));
   }, []);
 
   const uploadCsv = async (f: File) => {
@@ -330,7 +314,7 @@ function AddFromCsv() {
     const timer = window.setInterval(async () => {
       try {
         const status = await apiFetch<JobStatusResponse>(`/add/jobs/${jobId}`);
-        if (status.status === "finished") {
+        if (status.status === "done") {
           setResult(status.result as unknown as AddResult);
           setRunning(false);
           window.clearInterval(timer);
@@ -349,7 +333,7 @@ function AddFromCsv() {
     return () => window.clearInterval(timer);
   }, [jobId, show]);
 
-  const selectedFile = exportsRows.find((f) => f.id === file) || fallbackExports().find((f) => f.id === file) || null;
+  const selectedFile = exportsRows.find((f) => f.id === file) || null;
 
   const startAdd = async () => {
     if (!file) return;
@@ -389,7 +373,7 @@ function AddFromCsv() {
               {exportsRows.map((f) => (
                 <OptionButton key={f.id} label={f.file_name} desc={`${f.member_count.toLocaleString()} عضو — ${new Date(f.created_at).toLocaleDateString("ar-SA")}`} selected={file===f.id} onClick={() => setFile(f.id)} />
               ))}
-              {exportsRows.length === 0 && fallbackExports().map((f) => (
+              {exportsRows.length === 0 && ([] as GatherExportRecord[]).map((f) => (
                 <OptionButton key={f.id} label={f.file_name} desc={`${f.member_count.toLocaleString()} عضو — ${new Date(f.created_at).toLocaleDateString("ar-SA")}`} selected={file===f.id} onClick={() => setFile(f.id)} />
               ))}
               <input ref={csvRef} type="file" accept=".csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadCsv(f); e.target.value = ""; }} />
@@ -586,7 +570,7 @@ function AddManual() {
     const timer = window.setInterval(async () => {
       try {
         const status = await apiFetch<JobStatusResponse>(`/add/jobs/${jobId}`);
-        if (status.status === "finished") {
+        if (status.status === "done") {
           setResult(status.result as unknown as AddResult);
           setRunning(false);
           window.clearInterval(timer);
@@ -696,7 +680,7 @@ function SmartAdd() {
     const timer = window.setInterval(async () => {
       try {
         const status = await apiFetch<JobStatusResponse>(`/add/jobs/${jobId}`);
-        if (status.status === "finished") {
+        if (status.status === "done") {
           setResult(status.result as unknown as AddResult);
           setRunning(false);
           window.clearInterval(timer);
@@ -774,7 +758,7 @@ function MultiSource() {
   const { push } = useNav();
   const { show, node } = useToast();
   const queueEnabled = useQueueHealth();
-  const [exportsRows, setExportsRows] = useState<GatherExportRecord[]>(fallbackExports());
+  const [exportsRows, setExportsRows] = useState<GatherExportRecord[]>([]);
   const [csvSelected, setCsvSelected] = useState<number[]>([]);
   const [groupLinks, setGroupLinks]   = useState("");
   const [target, setTarget]           = useState("@my_group");
@@ -784,7 +768,7 @@ function MultiSource() {
   const [result, setResult] = useState<AddResult | null>(null);
 
   useEffect(() => {
-    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => setExportsRows(fallbackExports()));
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => setExportsRows([]));
   }, []);
 
   useEffect(() => {
@@ -792,7 +776,7 @@ function MultiSource() {
     const timer = window.setInterval(async () => {
       try {
         const status = await apiFetch<JobStatusResponse>(`/add/jobs/${jobId}`);
-        if (status.status === "finished") {
+        if (status.status === "done") {
           setResult(status.result as unknown as AddResult);
           setRunning(false);
           window.clearInterval(timer);
@@ -949,7 +933,7 @@ function Blacklist() {
     try {
       setRows(await apiFetch<BlacklistEntryRecord[]>("/add/blacklist"));
     } catch {
-      setRows(blacklist.map((b) => ({ id: b.id, user_value: b.user, reason: b.reason, created_at: `${b.date}T00:00:00Z` })) as BlacklistEntryRecord[]);
+      setRows([]);
     }
   };
 
@@ -1026,7 +1010,7 @@ function AddLogs() {
   const [selected, setSelected]     = useState<number|null>(null);
 
   useEffect(() => {
-    apiFetch<AddOperationRecord[]>("/add/operations").then(setOperations).catch(() => setOperations(addLogs.map((l) => ({ id: l.id, source_label: l.file, source_type: "csv", target_label: l.target, method: "direct", status: "done", total_count: l.success + l.fail, success_count: l.success, skipped_count: 0, failed_count: l.fail, created_at: `${l.date}T00:00:00Z` })) as AddOperationRecord[]));
+    apiFetch<AddOperationRecord[]>("/add/operations").then(setOperations).catch(() => setOperations([]));
     apiFetch<AddStats>("/add/stats").then(setStats).catch(() => setStats(null));
   }, []);
 
@@ -1045,7 +1029,7 @@ function AddLogs() {
           </div>
           <div className="card p-5">
             <SectionTitle>أداء كل حساب</SectionTitle>
-            <Table columns={["حساب","أرسل","نجح","فشل"]} rows={accounts.slice(0,3).map(a=>[
+            <Table columns={["حساب","أرسل","نجح","فشل"]} rows={([] as Array<{phone:string}>).slice(0,3).map((a)=>[
               a.phone,
               String(Math.floor(log.total_count/3)),
               String(Math.floor(log.success_count/3)),
@@ -1106,7 +1090,7 @@ function AddLogs() {
             <div className="card p-5">
               <SectionTitle>📈 نشاط آخر العمليات</SectionTitle>
               <div className="h-20 flex items-end gap-1">
-                {(operations.slice(0,7).length ? operations.slice(0,7) : addLogs.map((_,i)=>({id:i+1, success_count:[60,80,45,90,70,55,75][i]} as any))).map((op,i)=>(
+                {operations.slice(0,7).map((op,i)=>(
                   <div key={op.id ?? i} className="flex-1 bg-brand-400 rounded-t" style={{height:`${Math.max(20, Math.min(100, Math.round(((op.success_count ?? 1) / Math.max(1, (operations[0]?.success_count ?? 1000))) * 100)))}%`}} />
                 ))}
               </div>
@@ -1122,7 +1106,7 @@ function AddLogs() {
             </div>
             <div className="card p-5">
               <SectionTitle>أداء كل حساب (ترتيب)</SectionTitle>
-              <Table columns={["حساب","ناجح","فاشل","معدل النجاح"]} rows={accounts.map((a,i)=>[
+              <Table columns={["حساب","ناجح","فاشل","معدل النجاح"]} rows={([] as Array<{phone:string}>).map((a,i)=>[
                 a.phone,
                 String(Math.floor(((stats?.total_success ?? 14000)-i*2000)*0.94)),
                 String(Math.floor(((stats?.total_failed ?? 600)+i*10))),
@@ -1213,7 +1197,7 @@ function DefaultSettings() {
           <Button variant="danger" onClick={() => setConfirmReset(true)}>🔄 إعادة الافتراضية</Button>
         </div>
         <ConfirmDialog open={confirmReset} danger title="إعادة الإعدادات الافتراضية" message="سيتم استعادة جميع الإعدادات لقيمها الافتراضية."
-          onConfirm={()=>{ setConfirmReset(false); setForm(defaults); show("تمت إعادة الإعدادات الافتراضية محلياً"); }}
+          onConfirm={()=>{ setConfirmReset(false); setForm(defaults); show("تمت إعادة الإعدادات الافتراضية — احفظها من زر الحفظ"); }}
           onCancel={()=>setConfirmReset(false)} />
       </div>
       {node}
