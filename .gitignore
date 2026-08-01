@@ -13,3 +13,4 @@ backend/storage/*
 !backend/storage/backups/
 !backend/storage/sessions/
 !backend/storage/**/.gitkeep
+backend/*.db

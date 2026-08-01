@@ -4,8 +4,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
 from sqlalchemy.orm import Session
 
+from sqlalchemy.orm import Session
+
 from app.api.deps import DbSession, get_current_active_user
-from app.db.models import Account, AccountPool, User
+from app.db.models import Account, AccountPool, AppSetting, User
 from app.schemas.account import (
     AccountCreate,
     AccountPoolCreate,
@@ -13,6 +15,7 @@ from app.schemas.account import (
     AccountPoolPublic,
     AccountPoolUpdate,
     AccountPublic,
+    AccountSettingsPayload,
     AccountUpdate,
     BulkProfilePayload,
     ProfileUpdatePayload,
@@ -382,3 +385,69 @@ def bulk_profile_update(payload: BulkProfilePayload, db: DbSession, current_user
         payload={**payload.model_dump(), "actor_user_id": current_user.id},
     )
     return JobStartResponse(mode="queued", message="تم بدء التحديث الجماعي للملفات الشخصية", job_id=job_id)
+
+
+# ------------------------- Individual Settings -------------------------
+
+@router.get("/{account_id}/settings")
+def get_account_settings(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
+    """Load individual account settings from app_settings."""
+    from app.services.settings import get_setting_value
+
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    prefix = f"account_{account_id}_"
+    return {
+        "account_id": account_id,
+        "gather_limit": int(get_setting_value(db, f"{prefix}gather_limit") or 500),
+        "add_limit": int(get_setting_value(db, f"{prefix}add_limit") or 20),
+        "dm_limit": int(get_setting_value(db, f"{prefix}dm_limit") or 30),
+        "delay_min": int(get_setting_value(db, f"{prefix}delay_min") or 60),
+        "delay_max": int(get_setting_value(db, f"{prefix}delay_max") or 120),
+        "priority": get_setting_value(db, f"{prefix}priority") or "mid",
+        "allow_gather": (get_setting_value(db, f"{prefix}allow_gather") or "true").lower() == "true",
+        "allow_add": (get_setting_value(db, f"{prefix}allow_add") or "true").lower() == "true",
+        "allow_dm": (get_setting_value(db, f"{prefix}allow_dm") or "true").lower() == "true",
+        "allow_campaign": (get_setting_value(db, f"{prefix}allow_campaign") or "true").lower() == "true",
+        "allow_rotation": (get_setting_value(db, f"{prefix}allow_rotation") or "true").lower() == "true",
+        "limit_work_hours": (get_setting_value(db, f"{prefix}limit_work_hours") or "false").lower() == "true",
+        "work_hours_from": get_setting_value(db, f"{prefix}work_hours_from") or "08:00",
+        "work_hours_to": get_setting_value(db, f"{prefix}work_hours_to") or "22:00",
+    }
+
+
+@router.put("/{account_id}/settings", response_model=MessageResponse)
+def save_account_settings(account_id: int, payload: AccountSettingsPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
+    """Save individual account settings to app_settings."""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    prefix = f"account_{account_id}_"
+    _save_setting(db, f"{prefix}gather_limit", str(payload.gather_limit or 500))
+    _save_setting(db, f"{prefix}add_limit", str(payload.add_limit or 20))
+    _save_setting(db, f"{prefix}dm_limit", str(payload.dm_limit or 30))
+    _save_setting(db, f"{prefix}delay_min", str(payload.delay_min or 60))
+    _save_setting(db, f"{prefix}delay_max", str(payload.delay_max or 120))
+    _save_setting(db, f"{prefix}priority", payload.priority or "mid")
+    _save_setting(db, f"{prefix}allow_gather", str(payload.allow_gather if payload.allow_gather is not None else True))
+    _save_setting(db, f"{prefix}allow_add", str(payload.allow_add if payload.allow_add is not None else True))
+    _save_setting(db, f"{prefix}allow_dm", str(payload.allow_dm if payload.allow_dm is not None else True))
+    _save_setting(db, f"{prefix}allow_campaign", str(payload.allow_campaign if payload.allow_campaign is not None else True))
+    _save_setting(db, f"{prefix}allow_rotation", str(payload.allow_rotation if payload.allow_rotation is not None else True))
+    _save_setting(db, f"{prefix}limit_work_hours", str(payload.limit_work_hours or False))
+    _save_setting(db, f"{prefix}work_hours_from", payload.work_hours_from or "08:00")
+    _save_setting(db, f"{prefix}work_hours_to", payload.work_hours_to or "22:00")
+    write_audit_log(db, action="accounts.settings.update", message=f"تحديث إعدادات فردية للحساب {account.phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(account_id))
+    return MessageResponse(message="تم حفظ الإعدادات الفردية")
+
+
+def _save_setting(db: Session, key: str, value: str) -> None:
+    from app.core.crypto import encrypt_value
+    row = db.query(AppSetting).filter(AppSetting.key == key).first()
+    if row:
+        row.value_encrypted = encrypt_value(value)
+        db.add(row)
+    else:
+        db.add(AppSetting(key=key, value_encrypted=encrypt_value(value), is_secret=False))
+    db.commit()
