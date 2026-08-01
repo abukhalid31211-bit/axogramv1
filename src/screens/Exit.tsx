@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { LogOut } from "lucide-react";
 import { useNav } from "../nav";
+import { useAuth } from "../auth";
 import { PageHeader, Button } from "../ui";
 
 export function ExitScreen() {
   const { home } = useNav();
+  const { logout } = useAuth();
   const [confirm, setConfirm] = useState(false);
   return (
     <div className="animate-fade">
@@ -27,7 +29,7 @@ export function ExitScreen() {
             <h3 className="text-lg font-bold text-surface-800">تم تسجيل الخروج</h3>
             <p className="mt-1 text-sm text-surface-500">شكراً لاستخدام Axogram Pro.</p>
             <div className="mt-6">
-              <Button variant="primary" className="w-full" onClick={home}>العودة للرئيسية</Button>
+              <Button variant="primary" className="w-full" onClick={() => { logout(); home(); }}>العودة للرئيسية</Button>
             </div>
           </>
         )}

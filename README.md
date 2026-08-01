@@ -1,40 +1,121 @@
 # Axogram Pro
 
-لوحة تحكم (UI/UX) لنظام إدارة حسابات وحملات تيليجرام — واجهة أمامية كاملة ببيانات وهمية (mock).
+لوحة تحكم عربية لإدارة حسابات وحملات تيليجرام.
 
-## الوحدات
+> هذه النسخة أصبحت **بنية Full Stack أولية** داخل نفس المستودع:
+>
+> - **Frontend:** React + TypeScript + Vite + Tailwind
+> - **Backend:** FastAPI + SQLAlchemy
+> - **Database:** PostgreSQL
+> - **Queue/Worker:** Redis + RQ
+> - **Deploy:** Docker Compose + Nginx
 
-1. **مدير الحسابات** — إضافة، استيراد جلسات، عرض، تحقق، إزالة، تصدير، تهيئة (تسخين)
-2. **تجميع الأعضاء** — من عام/خاص/دردشة/ظاهرين/جماعي + دمج الملفات
-3. **إضافة الأعضاء** — من CSV/يدوي + استئناف + سجلات
-4. **نظام التدوير** — إعدادات + جدول + ترتيب + استهلاك + تصفير
-5. **مدير البروكسي** — إضافة/استيراد/عرض/تحقق/تعيين/إزالة الميتة
-6. **الإعدادات** — API + الحدود + المسارات + اللغة
-7. **التقارير والسجلات** — يومي/أسبوعي + سجلات + أخطاء + تصدير
-8. **أدوات الأمان** — قائمة سوداء + حدود ذكية + تحقق + تنظيف + مراقب + نسخ احتياطي
-9. **حملات القروبات** — معالج 7 خطوات + قوائم + قروبات + قوالب + جدولة + إحصائيات + إعدادات
-10. **الرسائل الجماعية (Mass DM)** — معالج 6 خطوات + قوائم + قائمة سوداء + قوالب + إحصائيات + إعدادات
+## البنية الحالية
 
-## التقنيات
-
-- React 18 + TypeScript
-- Vite 5
-- Tailwind CSS 3
-- lucide-react
-
-## التشغيل المحلي
-
-```bash
-npm install
-npm run dev
+```text
+axogramv1/
+├── src/                  # الواجهة الحالية
+├── backend/              # API + auth + DB models + uploads
+├── nginx/                # إعداد Nginx
+├── docker-compose.yml    # تشغيل كامل على سيرفر واحد
+├── Dockerfile.web        # بناء الواجهة وخدمتها عبر Nginx
+└── backend/Dockerfile    # بناء الـ API
 ```
 
-## البناء
+## ما تم تجهيزه الآن
 
+### Backend
+- تسجيل دخول JWT
+- مستخدم افتراضي Admin
+- CRUD للحسابات
+- CRUD للبروكسيات
+- إعدادات محفوظة داخل قاعدة البيانات مع **تشفير القيم الحساسة**
+- تقارير Dashboard أساسية
+- سجل نشاط Audit Log
+- رفع ملفات وحفظ metadata
+- seed data افتراضي لأول تشغيل
+
+### Frontend
+- شاشة تسجيل دخول
+- ربط Home بإحصائيات Dashboard من الـ API
+- ربط صفحة Settings بالـ API الحقيقي
+- Logout فعلي
+- Proxy dev server للـ API أثناء التطوير
+
+## بيانات الدخول الافتراضية
+
+عند أول تشغيل:
+
+- **Username:** `admin`
+- **Password:** `Admin123!`
+
+> غيّرها فورًا في بيئة الإنتاج.
+
+## تشغيل محلي سريع
+
+### 1) الواجهة
 ```bash
-npm run build
+pnpm install
+pnpm dev
 ```
 
-## النشر على Vercel
+### 2) الباك اند محليًا
+يفضل استخدام بيئة Python منفصلة:
 
-المشروع جاهز للنشر على Vercel. ملف `vercel.json` مُعد مسبقاً.
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+> تحتاج PostgreSQL وRedis محليًا، أو استخدم Docker Compose مباشرة.
+
+## التشغيل الكامل عبر Docker Compose
+
+### 1) انسخ ملف البيئة
+```bash
+cp .env.example .env
+```
+
+### 2) شغّل النظام
+```bash
+docker compose up --build
+```
+
+### 3) افتح التطبيق
+- الواجهة: `http://localhost`
+- API docs: `http://localhost/api/docs`
+- Health: `http://localhost/api/v1/health`
+
+## النشر على VPS واحد
+
+المستهدف:
+- Ubuntu 22.04+
+- Docker + Docker Compose Plugin
+- DNS يشير إلى السيرفر
+- يفضل لاحقًا إضافة HTTPS عبر Nginx Proxy Manager أو Certbot
+
+### خطوات مختصرة
+```bash
+git clone <repo>
+cd axogramv1
+cp .env.example .env
+nano .env   # غيّر القيم السرية
+sudo docker compose up -d --build
+```
+
+## ملاحظات مهمة
+
+- ملفات التخزين تحفظ داخل `backend/storage`
+- القيم الحساسة داخل الإعدادات تُخزن مشفرة في قاعدة البيانات
+- هذا الأساس جاهز للتوسع، لكن **الوحدات الكبيرة مثل Telegram execution الفعلي، الحملات، Mass DM، الـ queues المتقدمة، والاستئناف الذكي ما زالت تحتاج ربطًا وتنفيذًا إضافيًا**
+
+## الخطوات التالية المقترحة
+
+1. ربط وحدات الحسابات والبروكسيات بالكامل بالـ API
+2. بناء تكامل Telethon الحقيقي
+3. إضافة jobs فعلية للمهام الطويلة
+4. إضافة جدولة وتشغيل حملات حقيقي
+5. إضافة اختبارات وHardening للإنتاج

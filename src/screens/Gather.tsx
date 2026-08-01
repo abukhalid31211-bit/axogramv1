@@ -11,9 +11,53 @@ import {
   StatCard, Tabs, ConfirmDialog,
 } from "../ui";
 import { exportedFiles } from "../data";
+import {
+  apiFetch,
+  downloadApiFile,
+  type AccountRecord,
+  type GatherExportRecord,
+  type GatherExtractResult,
+  type GatherMergeResult,
+  type GatherStats,
+  type JobStartResponse,
+  type JobStatusResponse,
+} from "../lib/api";
+
+function useQueueHealth() {
+  const [queueEnabled, setQueueEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    apiFetch<{ queue_available: boolean }>("/jobs/health")
+      .then((data) => setQueueEnabled(data.queue_available))
+      .catch(() => setQueueEnabled(false));
+  }, []);
+  return queueEnabled;
+}
+
+function fallbackExports(): GatherExportRecord[] {
+  return exportedFiles.map((file) => ({
+    id: file.id,
+    source_label: file.name,
+    source_type: "fallback",
+    file_name: file.name,
+    file_path: file.name,
+    member_count: file.members,
+    status: "ready",
+    notes: null,
+    created_by: null,
+    created_at: `${file.date}T00:00:00Z`,
+  }));
+}
 
 export function GatherModule() {
   const { push } = useNav();
+  const [stats, setStats] = useState<GatherStats | null>(null);
+  const [exportsList, setExportsList] = useState<GatherExportRecord[]>(fallbackExports());
+
+  useEffect(() => {
+    apiFetch<GatherStats>("/gather/stats").then(setStats).catch(() => setStats(null));
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsList).catch(() => setExportsList(fallbackExports()));
+  }, []);
+
   const items = [
     { id:"public",    label:"من مجموعة/قناة عامة",            desc:"رابط أو @username",     icon:Globe         },
     { id:"private",   label:"من رابط دعوة خاص",               desc:"t.me/+ أو joinchat",    icon:Link2         },
@@ -32,10 +76,10 @@ export function GatherModule() {
     <div className="animate-fade">
       <PageHeader title="تجميع الأعضاء" subtitle="استخراج الأعضاء من المجموعات" icon={<Download className="h-5 w-5" />} />
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard label="مُجمَّع اليوم"   value="15,340" tone="accent" />
-        <StatCard label="الأسبوع"         value="48,200" tone="brand"  />
-        <StatCard label="ملفات محفوظة"   value={String(exportedFiles.length)} tone="accent" />
-        <StatCard label="آخر عملية"       value="منذ 2د"  tone="brand"  />
+        <StatCard label="إجمالي الأعضاء" value={(stats?.total_members ?? exportsList.reduce((sum, f) => sum + f.member_count, 0)).toLocaleString()} tone="accent" />
+        <StatCard label="عدد الملفات" value={String(stats?.total_exports ?? exportsList.length)} tone="brand" />
+        <StatCard label="ملفات محفوظة" value={String(exportsList.length)} tone="accent" />
+        <StatCard label="آخر عملية" value={stats?.latest_export_at ? new Date(stats.latest_export_at).toLocaleDateString("ar-SA") : "منذ 2د"} tone="brand" />
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((it) => {
@@ -145,6 +189,7 @@ function GatherRunning({ onDone, onBack }: { onDone: () => void; onBack: () => v
 function PublicGather() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const queueEnabled = useQueueHealth();
   const [step, setStep] = useState(0);
   const [link, setLink] = useState("");
   const [type, setType] = useState<"all"|"active"|"online"|"range"|"admins"|"bots"|"reactions">("all");
@@ -155,25 +200,91 @@ function PublicGather() {
   const [filters, setFilters] = useState({ bots:true, deleted:true, noUser:false, photo:false, arabic:false, english:false, old:false, phone:false, new:false });
   const [fields, setFields] = useState({ id:true, name:true, username:false, phone:false, last:false, bio:false, photo:false, bot:false, admin:false, joined:false });
   const [account, setAccount] = useState<"single"|"rotate">("rotate");
+  const [accountRows, setAccountRows] = useState<AccountRecord[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [templateName, setTemplateName] = useState("");
   const [saveTemplate, setSaveTemplate] = useState(false);
-  const [started, setStarted] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<GatherExtractResult | null>(null);
 
-  if (started) return <GatherRunning onDone={()=>setStarted(false)} onBack={()=>{ setStarted(false); setStep(0); }} />;
+  useEffect(() => {
+    apiFetch<AccountRecord[]>("/accounts")
+      .then((rows) => setAccountRows(rows.filter((row) => !!row.session_file_path)))
+      .catch(() => setAccountRows([]));
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await apiFetch<JobStatusResponse>(`/gather/jobs/${jobId}`);
+        if (status.status === "finished") {
+          setResult(status.result as unknown as GatherExtractResult);
+          setRunning(false);
+          window.clearInterval(timer);
+        }
+        if (status.status === "failed") {
+          show(status.error || "فشل تنفيذ مهمة التجميع", "danger");
+          setRunning(false);
+          window.clearInterval(timer);
+        }
+      } catch (err) {
+        setRunning(false);
+        window.clearInterval(timer);
+        show(err instanceof Error ? err.message : "تعذر متابعة حالة المهمة", "danger");
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [jobId, show]);
+
+  const selectedLimit = limit === "custom" ? Number(customLimit || 5000) : limit === "all" ? 10000 : Number(limit);
+
+  const startGather = async () => {
+    setRunning(true);
+    setResult(null);
+    setJobId(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/gather/extract", {
+        method: "POST",
+        body: JSON.stringify({
+          source_label: link || "@market_sa",
+          source_type: "public",
+          extract_mode: type,
+          limit: selectedLimit,
+          account_id: account === "single" ? selectedAccountId : null,
+          run_inline: queueEnabled === false,
+        }),
+      });
+      show(response.message);
+      if (response.mode === "finished") {
+        setResult(response.result as unknown as GatherExtractResult);
+        setRunning(false);
+      } else {
+        setJobId(response.job_id || null);
+      }
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء التجميع", "danger");
+    }
+  };
 
   return (
     <div className="animate-fade">
       <PageHeader title="من مجموعة/قناة عامة" icon={<Globe className="h-5 w-5" />}
         steps={step>0?{label:"تجميع الأعضاء",n:step+1,total:5}:undefined} />
       <div className="mx-auto max-w-2xl">
+        <Alert tone={queueEnabled ? "info" : "warn"} title={queueEnabled ? "Worker/Queue متاح" : "سيتم التنفيذ المباشر حالياً"}>
+          {queueEnabled ? "سيتم تنفيذ التجميع في الخلفية عند بدء التشغيل." : "قائمة الانتظار غير متاحة حالياً، لذلك سيتم التوليد مباشرة داخل الـ API."}
+        </Alert>
         {step===0 && (
           <div className="card p-6 space-y-4">
             <SectionTitle icon={<Globe className="h-4 w-4" />}>رابط أو @username</SectionTitle>
             <Field placeholder="@group_username أو t.me/group" value={link} onChange={setLink} />
             <Alert tone="info" title="📌 معلومات المجموعة">
               <div className="mt-1 flex flex-wrap gap-3 text-xs">
-                <span>الاسم: @market_sa</span><span>النوع: عام</span>
-                <span>الأعضاء: 15,340</span><span>الوصف: سوق السعودية</span>
+                <span>الاسم: {link || "@market_sa"}</span><span>النوع: عام</span>
+                <span>الأعضاء: تقديري حسب المهمة</span><span>الوصف: سيتم الحفظ كملف CSV على السيرفر</span>
               </div>
             </Alert>
             <Button variant="primary" className="w-full" onClick={() => setStep(1)}>التالي — نوع التجميع</Button>
@@ -252,6 +363,15 @@ function PublicGather() {
             <SectionTitle>الحساب المستخدم</SectionTitle>
             <OptionButton label="👤 حساب واحد"              selected={account==="single"} onClick={() => setAccount("single")} />
             <OptionButton label="⭐ تدوير بين عدة حسابات"   selected={account==="rotate"} onClick={() => setAccount("rotate")} />
+            {account === "single" && (
+              <div className="space-y-2 pt-2">
+                {accountRows.length === 0 ? (
+                  <Alert tone="warn" title="لا توجد حسابات مرتبطة بجلسات تيليجرام">اربط حسابًا من مدير الحسابات عبر Telegram OTP حتى تستخدمه في التجميع الحقيقي.</Alert>
+                ) : accountRows.map((row) => (
+                  <OptionButton key={row.id} label={`${row.name} — ${row.phone}`} desc={row.username || "بدون username"} selected={selectedAccountId === row.id} onClick={() => setSelectedAccountId(row.id)} />
+                ))}
+              </div>
+            )}
             <div className="flex gap-2 pt-2">
               <Button variant="primary" className="flex-1" onClick={() => setStep(4)}>التالي</Button>
               <Button onClick={() => setStep(2)}>رجوع</Button>
@@ -263,17 +383,35 @@ function PublicGather() {
             <SectionTitle>ملخص</SectionTitle>
             <div className="grid gap-2 sm:grid-cols-2">
               <SRow label="المجموعة" value={link||"@market_sa"} />
-              <SRow label="النوع"    value="جميع الأعضاء" />
+              <SRow label="النوع"    value={type} />
               <SRow label="الحد"     value={limit==="custom"?customLimit:limit==="all"?"الكل":limit} />
-              <SRow label="الحساب"   value={account==="rotate"?"تدوير":"حساب واحد"} />
+              <SRow label="الحساب"   value={account==="rotate"?"تدوير":(accountRows.find((row)=>row.id===selectedAccountId)?.phone || "حساب واحد")} />
             </div>
             <div className="space-y-2">
               <Checkbox label="💾 حفظ هذا الإعداد كقالب تجميع" checked={saveTemplate} onChange={setSaveTemplate} />
               {saveTemplate && <Field label="اسم القالب" placeholder="قالب السوق" value={templateName} onChange={setTemplateName} />}
             </div>
             <div className="flex gap-2">
-              <Button variant="primary" className="flex-1" icon={<Play className="h-4 w-4" />} onClick={() => setStarted(true)}>✅ بدء التجميع</Button>
+              <Button variant="primary" className="flex-1" icon={<Play className="h-4 w-4" />} disabled={running || (account === "single" && !selectedAccountId && accountRows.length > 0)} onClick={() => void startGather()}>{running ? "جاري التجميع..." : "✅ بدء التجميع"}</Button>
               <Button onClick={() => setStep(3)}>رجوع</Button>
+            </div>
+          </div>
+        )}
+        {running && <div className="mt-4"><Progress value={jobId ? 55 : 80} label={jobId ? `المهمة في الانتظار: ${jobId}` : "جاري إنشاء ملف التصدير..."} sub={jobId ? "Queue" : "Inline"} tone="accent" /></div>}
+        {result && (
+          <div className="mt-4 card p-6 space-y-4">
+            <Alert tone={result.execution_mode === "telethon" ? "success" : "warn"} title={result.execution_mode === "telethon" ? "✅ اكتمل التجميع الحقيقي عبر Telethon" : "⚠️ اكتمل التجميع لكن باستخدام fallback"}>
+              <div className="mt-1 text-xs space-y-1">
+                <div>الملف: {result.file_name} — عدد الأعضاء: {result.member_count.toLocaleString()}</div>
+                <div>وضع التنفيذ: {result.execution_mode || "unknown"}</div>
+                {result.warning && <div>{result.warning}</div>}
+              </div>
+            </Alert>
+            <div className="flex flex-wrap gap-2">
+              <Button icon={<FileText className="h-4 w-4" />} onClick={() => void downloadApiFile(`/gather/exports/${result.export_id}/download`, result.file_name)}>📂 فتح الملف</Button>
+              <Button variant="primary" icon={<ArrowRight className="h-4 w-4" />} onClick={() => push(["add"])}>📤 أداة الإضافة</Button>
+              <Button icon={<GitMerge className="h-4 w-4" />} onClick={() => push(["gather","merge"])}>🔀 دمج مع ملف</Button>
+              <Button icon={<BarChart3 className="h-4 w-4" />} onClick={() => push(["gather","stats"])}>📊 إحصائيات</Button>
             </div>
           </div>
         )}
@@ -597,14 +735,72 @@ function FileCleaner() {
 function MergeFiles() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const queueEnabled = useQueueHealth();
+  const [exportsRows, setExportsRows] = useState<GatherExportRecord[]>(fallbackExports());
   const [selected, setSelected]     = useState<number[]>([]);
   const [merging, setMerging]       = useState(false);
   const [done, setDone]             = useState(false);
   const [dedup, setDedup]           = useState(true);
   const [applyClean, setApplyClean] = useState(false);
   const [outName, setOutName]       = useState("merged_result.csv");
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [mergeResult, setMergeResult] = useState<GatherMergeResult | null>(null);
+
+  useEffect(() => {
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => setExportsRows(fallbackExports()));
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await apiFetch<JobStatusResponse>(`/gather/jobs/${jobId}`);
+        if (status.status === "finished") {
+          setMergeResult(status.result as unknown as GatherMergeResult);
+          setMerging(false);
+          setDone(true);
+          window.clearInterval(timer);
+          apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => undefined);
+        }
+        if (status.status === "failed") {
+          show(status.error || "فشل الدمج", "danger");
+          setMerging(false);
+          window.clearInterval(timer);
+        }
+      } catch (err) {
+        show(err instanceof Error ? err.message : "تعذر متابعة حالة الدمج", "danger");
+        setMerging(false);
+        window.clearInterval(timer);
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [jobId, show]);
+
   const toggle = (id: number) => setSelected((s) => (s.includes(id)?s.filter(x=>x!==id):[...s,id]));
-  const total  = exportedFiles.filter(f=>selected.includes(f.id)).reduce((s,f)=>s+f.members,0);
+  const total  = exportsRows.filter(f=>selected.includes(f.id)).reduce((s,f)=>s+f.member_count,0);
+
+  const startMerge = async () => {
+    setMerging(true);
+    setDone(false);
+    setMergeResult(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/gather/merge", {
+        method: "POST",
+        body: JSON.stringify({ export_ids: selected, deduplicate: dedup, run_inline: queueEnabled === false }),
+      });
+      show(response.message);
+      if (response.mode === "finished") {
+        setMergeResult(response.result as unknown as GatherMergeResult);
+        setMerging(false);
+        setDone(true);
+      } else {
+        setJobId(response.job_id || null);
+      }
+    } catch (err) {
+      setMerging(false);
+      show(err instanceof Error ? err.message : "تعذر بدء الدمج", "danger");
+    }
+  };
 
   return (
     <div className="animate-fade">
@@ -612,12 +808,12 @@ function MergeFiles() {
       <div className="card p-5 space-y-4">
         <SectionTitle>اختر الملفات للدمج</SectionTitle>
         <div className="space-y-2">
-          {exportedFiles.map((f) => (
-            <Checkbox key={f.id} label={`${f.name} (${f.members.toLocaleString()} عضو)`} checked={selected.includes(f.id)} onChange={() => toggle(f.id)} />
+          {exportsRows.map((f) => (
+            <Checkbox key={f.id} label={`${f.file_name} (${f.member_count.toLocaleString()} عضو)`} checked={selected.includes(f.id)} onChange={() => toggle(f.id)} />
           ))}
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => setSelected(exportedFiles.map(f=>f.id))}>☑️ تحديد الكل</Button>
+          <Button onClick={() => setSelected(exportsRows.map(f=>f.id))}>☑️ تحديد الكل</Button>
           <Button onClick={() => setSelected([])}>⬜ إلغاء الكل</Button>
         </div>
         {selected.length>0 && <Alert tone="info" title={`إجمالي المحدد: ${total.toLocaleString()} عضو (قبل إزالة المكرر)`} />}
@@ -625,20 +821,20 @@ function MergeFiles() {
         <Checkbox label="تطبيق فلاتر التنقية بعد الدمج"   checked={applyClean} onChange={setApplyClean} />
         {!merging && !done && (
           <Button variant="primary" className="w-full" disabled={selected.length<2}
-            onClick={() => { setMerging(true); setTimeout(()=>{ setMerging(false); setDone(true); },1500); }}>✅ بدء الدمج</Button>
+            onClick={() => void startMerge()}>✅ بدء الدمج</Button>
         )}
-        {merging && <Progress value={75} label="🔀 جاري الدمج..." sub="75%" tone="accent" />}
-        {done && (
+        {merging && <Progress value={jobId ? 55 : 75} label="🔀 جاري الدمج..." sub={jobId ? "Queue" : "Inline"} tone="accent" />}
+        {done && mergeResult && (
           <div className="space-y-3">
             <Alert tone="success" title="اكتمل الدمج">
-              <div className="mt-1 text-xs">إجمالي: {total.toLocaleString()} | مكرر أُزيل: {Math.floor(total*0.04).toLocaleString()} | النتيجة: {Math.floor(total*0.96).toLocaleString()}</div>
+              <div className="mt-1 text-xs">إجمالي الإدخال: {total.toLocaleString()} | النتيجة: {mergeResult.member_count.toLocaleString()} | الملفات: {mergeResult.input_count}</div>
             </Alert>
             <InlineEdit label="اسم الملف الجديد" value={outName} onSave={setOutName} placeholder="merged_result.csv" />
             <div className="flex gap-2">
-              <Button variant="primary" className="flex-1" onClick={() => show("تم حفظ الملف المدمج")}>💾 حفظ الملف المدمج</Button>
-              <Button onClick={() => { setDone(false); setSelected([]); }}>دمج آخر</Button>
+              <Button variant="primary" className="flex-1" onClick={() => void downloadApiFile(`/gather/exports/${mergeResult.export_id}/download`, mergeResult.file_name)}>💾 تنزيل الملف المدمج</Button>
+              <Button onClick={() => { setDone(false); setSelected([]); setJobId(null); }}>دمج آخر</Button>
             </div>
-            <Alert tone="info" title="تم إرسال الملف كمرفق CSV" />
+            <Alert tone="info" title={`تم إنشاء الملف: ${mergeResult.file_name}`} />
           </div>
         )}
       </div>
@@ -651,6 +847,7 @@ function MergeFiles() {
 function FilesView() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const [files, setFiles] = useState<GatherExportRecord[]>(fallbackExports());
   const [selected, setSelected] = useState<number|null>(null);
   const [sortBy, setSortBy]     = useState<"new"|"big"|"alpha">("new");
   const [search, setSearch]     = useState("");
@@ -659,35 +856,55 @@ function FilesView() {
   const [renaming, setRenaming]         = useState<number|null>(null);
   const [newName, setNewName]           = useState("");
 
+  useEffect(() => {
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setFiles).catch(() => setFiles(fallbackExports()));
+  }, []);
+
+  const ordered = [...files]
+    .filter((f) => !search || f.file_name.includes(search) || f.source_label.includes(search))
+    .sort((a, b) => sortBy === "big" ? b.member_count - a.member_count : sortBy === "alpha" ? a.file_name.localeCompare(b.file_name) : b.id - a.id);
+
   const toggle = (id:number) => setBulkSelected(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
 
+  const doDelete = async (id: number) => {
+    try {
+      await apiFetch(`/gather/exports/${id}`, { method: "DELETE" });
+      setFiles((prev) => prev.filter((f) => f.id !== id));
+      setSelected(null);
+      show("تم حذف الملف","danger");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر حذف الملف", "danger");
+    }
+  };
+
   if (selected !== null) {
-    const file = exportedFiles.find(f=>f.id===selected)!;
+    const file = files.find(f=>f.id===selected) ?? ordered.find(f=>f.id===selected);
+    if (!file) return <EmptyState icon={<FolderOpen className="h-8 w-8" />} title="الملف غير موجود" />;
     return (
       <div className="animate-fade">
-        <PageHeader title={file.name} icon={<FolderOpen className="h-5 w-5" />} />
+        <PageHeader title={file.file_name} icon={<FolderOpen className="h-5 w-5" />} />
         <div className="space-y-4">
           <div className="card p-5">
             <SectionTitle>📊 إحصائيات الملف</SectionTitle>
             <div className="grid gap-2 sm:grid-cols-2">
-              <SRow label="عدد الأعضاء"    value={file.members.toLocaleString()} />
-              <SRow label="تاريخ التجميع"  value={file.date} />
-              <SRow label="بـ @username"   value={`${Math.floor(file.members*0.72).toLocaleString()} (72%)`} />
-              <SRow label="بصورة شخصية"   value={`${Math.floor(file.members*0.55).toLocaleString()} (55%)`} />
-              <SRow label="آخر ظهور اليوم" value={`${Math.floor(file.members*0.18).toLocaleString()} (18%)`} />
+              <SRow label="عدد الأعضاء"    value={file.member_count.toLocaleString()} />
+              <SRow label="تاريخ التجميع"  value={new Date(file.created_at).toLocaleDateString("ar-SA")} />
+              <SRow label="المصدر"         value={file.source_label} />
+              <SRow label="النوع"          value={file.source_type} />
+              <SRow label="الحالة"         value={file.status} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <Button onClick={() => show("تم إرسال CSV")}>📂 إرسال CSV</Button>
-            <Button onClick={() => show("تم إرسال Excel")}>📊 إرسال Excel</Button>
+            <Button onClick={() => void downloadApiFile(`/gather/exports/${file.id}/download`, file.file_name)}>📂 إرسال CSV</Button>
+            <Button onClick={() => show("دعم Excel سيُضاف لاحقاً")}>📊 إرسال Excel</Button>
             <Button onClick={() => push(["add"])}>📤 استخدام في الإضافة</Button>
             <Button onClick={() => push(["gather","cleaner"])}>🧹 تنقية هذا الملف</Button>
-            <Button onClick={() => { setRenaming(file.id); setNewName(file.name); }}>✏️ إعادة تسمية</Button>
-            <Button variant="danger" onClick={() => { show("تم حذف الملف","danger"); setSelected(null); }}>🗑 حذف</Button>
+            <Button onClick={() => { setRenaming(file.id); setNewName(file.file_name); }}>✏️ إعادة تسمية</Button>
+            <Button variant="danger" onClick={() => void doDelete(file.id)}>🗑 حذف</Button>
           </div>
           {renaming===file.id && (
             <div className="card p-4">
-              <InlineEdit label="الاسم الجديد" value={newName} onSave={(v)=>{ setNewName(v); setRenaming(null); show("تم إعادة التسمية"); }} />
+              <InlineEdit label="الاسم الجديد" value={newName} onSave={(v)=>{ setNewName(v); setRenaming(null); show("تم حفظ الاسم الجديد محلياً — سيُربط backend rename لاحقاً"); }} />
             </div>
           )}
           <Button onClick={() => setSelected(null)}>🔙 رجوع للقائمة</Button>
@@ -707,24 +924,24 @@ function FilesView() {
             active={sortBy} onChange={(v)=>setSortBy(v as typeof sortBy)} />
         </div>
         <div className="flex gap-2">
-          <Button onClick={()=>setBulkSelected(exportedFiles.map(f=>f.id))}>☑️ تحديد الكل</Button>
+          <Button onClick={()=>setBulkSelected(ordered.map(f=>f.id))}>☑️ تحديد الكل</Button>
           <Button variant="danger" disabled={bulkSelected.length===0} onClick={()=>setConfirmDel(true)}>🗑 حذف المحدد</Button>
           <Button disabled={bulkSelected.length<2} onClick={()=>push(["gather","merge"])}>🔀 دمج المحدد</Button>
-          <Button disabled={bulkSelected.length===0} onClick={()=>show("تم ضغط الملفات وإرسالها")}>📦 ضغط وإرسال ZIP</Button>
+          <Button disabled={bulkSelected.length===0} onClick={()=>show("دعم ZIP لاحقاً")}>📦 ضغط وإرسال ZIP</Button>
         </div>
-        {exportedFiles.length===0
+        {ordered.length===0
           ? <EmptyState icon={<FolderOpen className="h-8 w-8" />} title="لا توجد ملفات" />
-          : <Table columns={["","اسم","الأعضاء","التاريخ",""]} rows={exportedFiles.map((f)=>[
+          : <Table columns={["","اسم","الأعضاء","التاريخ",""]} rows={ordered.map((f)=>[
               <input type="checkbox" checked={bulkSelected.includes(f.id)} onChange={()=>toggle(f.id)} className="h-4 w-4 accent-brand-600" />,
-              f.name, f.members.toLocaleString(), f.date,
+              f.file_name, f.member_count.toLocaleString(), new Date(f.created_at).toLocaleDateString("ar-SA"),
               <div className="flex gap-1.5">
                 <Button onClick={() => setSelected(f.id)}>تفاصيل</Button>
-                <Button onClick={() => show("تم إرسال CSV")}>إرسال</Button>
+                <Button onClick={() => void downloadApiFile(`/gather/exports/${f.id}/download`, f.file_name)}>إرسال</Button>
                 <Button onClick={() => push(["add"])}>استخدام</Button>
               </div>,
             ])} />}
         <ConfirmDialog open={confirmDel} danger title="حذف الملفات المحددة" message={`سيتم حذف ${bulkSelected.length} ملف نهائياً.`}
-          onConfirm={()=>{ setConfirmDel(false); setBulkSelected([]); show("تم حذف الملفات"); }}
+          onConfirm={async ()=>{ for (const id of bulkSelected) await doDelete(id); setConfirmDel(false); setBulkSelected([]); }}
           onCancel={()=>setConfirmDel(false)} />
       </div>
       {node}
@@ -790,35 +1007,43 @@ function GatherTemplates() {
 /* ── GatherStats ── */
 function GatherStats() {
   const { show, node } = useToast();
+  const [stats, setStats] = useState<GatherStats | null>(null);
+  const [rows, setRows] = useState<GatherExportRecord[]>(fallbackExports());
+
+  useEffect(() => {
+    apiFetch<GatherStats>("/gather/stats").then(setStats).catch(() => setStats(null));
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setRows).catch(() => setRows(fallbackExports()));
+  }, []);
+
+  const recent = rows.slice(0, 3);
   return (
     <div className="animate-fade">
       <PageHeader title="إحصائيات التجميع" icon={<BarChart3 className="h-5 w-5" />} />
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatCard label="الكل الوقت"    value="284,200" tone="accent" />
-          <StatCard label="اليوم"          value="15,340"  tone="brand"  />
-          <StatCard label="الأسبوع"       value="48,200"  tone="accent" />
-          <StatCard label="متوسط السرعة"  value="12/ث"    tone="brand"  />
+          <StatCard label="الكل الوقت" value={(stats?.total_members ?? rows.reduce((s, r) => s + r.member_count, 0)).toLocaleString()} tone="accent" />
+          <StatCard label="عدد الملفات" value={String(stats?.total_exports ?? rows.length)} tone="brand" />
+          <StatCard label="آخر تصدير" value={stats?.latest_export_at ? new Date(stats.latest_export_at).toLocaleDateString("ar-SA") : "—"} tone="accent" />
+          <StatCard label="متوسط/ملف" value={(rows.length ? Math.round(rows.reduce((s, r) => s + r.member_count, 0) / rows.length) : 0).toLocaleString()} tone="brand" />
         </div>
         <div className="card p-5">
-          <SectionTitle>📈 نشاط التجميع — آخر 7 أيام</SectionTitle>
+          <SectionTitle>📈 نشاط التجميع — آخر الملفات</SectionTitle>
           <div className="h-24 flex items-end gap-1">
-            {[40,70,55,90,65,80,45].map((h,i)=>(
-              <div key={i} className="flex-1 bg-accent-400 rounded-t opacity-80" style={{height:`${h}%`}} />
+            {(recent.length ? recent : fallbackExports().slice(0,3)).map((item,i)=>(
+              <div key={item.id ?? i} className="flex-1 bg-accent-400 rounded-t opacity-80" style={{height:`${Math.min(100, Math.max(20, Math.round(item.member_count/100)))}%`}} />
             ))}
           </div>
           <div className="mt-1 flex justify-between text-xs text-surface-400">
-            <span>السبت</span><span>الأحد</span><span>الاثنين</span><span>الثلاثاء</span>
-            <span>الأربعاء</span><span>الخميس</span><span>الجمعة</span>
+            {(recent.length ? recent : fallbackExports().slice(0,3)).map((item) => <span key={item.id}>{item.source_label.slice(0,10)}</span>)}
           </div>
         </div>
         <div className="card p-5">
           <SectionTitle>أكثر المصادر تجميعاً (Top Sources)</SectionTitle>
-          <Table columns={["المجموعة","المجموع","آخر تجميع"]} rows={[
-            ["@market_sa",    "45,000", "2026-07-01"],
-            ["@crypto_world", "28,400", "2026-06-30"],
-            ["@offers_daily", "19,800", "2026-06-28"],
-          ]} />
+          <Table columns={["المجموعة","المجموع","آخر تجميع"]} rows={(recent.length ? recent : fallbackExports().slice(0,3)).map((item) => [
+            item.source_label,
+            item.member_count.toLocaleString(),
+            new Date(item.created_at).toLocaleDateString("ar-SA"),
+          ])} />
         </div>
         <div className="card p-5">
           <SectionTitle>توزيع الفلاتر: كم أُزيل من كل نوع</SectionTitle>

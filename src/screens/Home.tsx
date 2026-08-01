@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   Users, Download, UserPlus, RefreshCw, Globe, Settings, BarChart3,
   Shield, Megaphone, MessageSquare, LogOut, Send, ChevronLeft,
@@ -5,6 +6,7 @@ import {
 import { useNav } from "../nav";
 import { StatCard } from "../ui";
 import { accounts, campaigns, dmCampaigns, proxies } from "../data";
+import { apiFetch, type DashboardSummary } from "../lib/api";
 
 const modules = [
   { id: "accounts",  label: "مدير الحسابات",      desc: "إضافة، استيراد، تهيئة وتحقق",      icon: Users,         tone: "brand"  },
@@ -29,10 +31,28 @@ const toneMap: Record<Tone, { icon: string; card: string }> = {
 
 export function HomeScreen() {
   const { push } = useNav();
-  const activeAccounts  = accounts.filter((a) => a.status === "active").length;
-  const activeProxies   = proxies.filter((p) => p.status === "active").length;
-  const activeCampaigns = campaigns.filter((c) => c.status === "active").length
-                        + dmCampaigns.filter((c) => c.status === "active").length;
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    apiFetch<DashboardSummary>("/reports/dashboard")
+      .then((data) => {
+        if (mounted) setSummary(data);
+      })
+      .catch(() => {
+        if (mounted) setSummary(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const activeAccounts  = summary?.accounts_active ?? accounts.filter((a) => a.status === "active").length;
+  const activeProxies   = summary?.proxies_active ?? proxies.filter((p) => p.status === "active").length;
+  const activeCampaigns = summary?.campaigns_active ?? (campaigns.filter((c) => c.status === "active").length
+                        + dmCampaigns.filter((c) => c.status === "active").length);
+  const groupsCount = summary?.accounts_total ? Math.max(5, summary.accounts_total) : 5;
+
   return (
     <div className="animate-fade">
       <div className="mb-8 overflow-hidden rounded-2xl border border-surface-200 bg-white shadow-card">
@@ -51,7 +71,7 @@ export function HomeScreen() {
             <StatCard label="حسابات نشطة"  value={activeAccounts}  icon={<Users className="h-4 w-4"/>}     tone="brand"  />
             <StatCard label="بروكسي نشط"   value={activeProxies}   icon={<Globe className="h-4 w-4"/>}     tone="accent" />
             <StatCard label="حملات نشطة"   value={activeCampaigns} icon={<Megaphone className="h-4 w-4"/>}  tone="warn"   />
-            <StatCard label="قروبات"        value={5}               icon={<BarChart3 className="h-4 w-4"/>}  tone="brand"  />
+            <StatCard label="إجمالي الحسابات" value={groupsCount}  icon={<BarChart3 className="h-4 w-4"/>}  tone="brand"  />
           </div>
         </div>
       </div>
