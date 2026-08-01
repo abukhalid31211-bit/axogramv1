@@ -3,7 +3,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, get_current_active_user, require_module
+from app.services.subscription import is_platform_admin
 from app.db.models import Account, AppSetting, RotationLog, User
 from app.schemas.common import MessageResponse
 from app.schemas.rotation import (
@@ -18,7 +19,7 @@ from app.schemas.rotation import (
 )
 from app.services.audit import write_audit_log
 
-router = APIRouter(prefix="/rotation", tags=["rotation"])
+router = APIRouter(prefix="/rotation", tags=["rotation"], dependencies=[Depends(require_module("rotation"))])
 
 ROTATION_SETTING_DEFAULTS = {
     "rotation_mode": "smart",
@@ -100,7 +101,10 @@ def update_rotation_settings(
 def rotation_table(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> list[RotationTableRow]:
     from app.services.rotation import daily_limit_for, get_usage_snapshot
 
-    accounts = db.query(Account).order_by(Account.id.asc()).all()
+    query = db.query(Account)
+    if not is_platform_admin(current_user):
+        query = query.filter(Account.owner_user_id == current_user.id)
+    accounts = query.order_by(Account.id.asc()).all()
     usage_map = {r["account_id"]: r for r in get_usage_snapshot(db)}
     rows = []
     for i, acc in enumerate(accounts):
@@ -129,7 +133,10 @@ def rotation_usage(db: DbSession, current_user: Annotated[User, Depends(get_curr
     from app.services.rotation import daily_limit_for, get_usage_snapshot
 
     usage_map = {r["account_id"]: r for r in get_usage_snapshot(db)}
-    accounts = db.query(Account).order_by(Account.id.asc()).all()
+    query = db.query(Account)
+    if not is_platform_admin(current_user):
+        query = query.filter(Account.owner_user_id == current_user.id)
+    accounts = query.order_by(Account.id.asc()).all()
     rows = []
     for acc in accounts:
         usage = usage_map.get(acc.id)
@@ -157,14 +164,21 @@ def rotation_live(db: DbSession, current_user: Annotated[User, Depends(get_curre
     from app.services import jobrunner as jr
 
     runs = jr.get_active_runs()
+    if not is_platform_admin(current_user):
+        runs = [r for r in runs if r.created_by == current_user.id]
+    accounts_query = db.query(Account)
+    if not is_platform_admin(current_user):
+        accounts_query = accounts_query.filter(Account.owner_user_id == current_user.id)
+    visible_ids = {a.id for a in accounts_query.all()}
+    usage = [row for row in get_usage_snapshot(db) if row["account_id"] in visible_ids]
     return {
         "active_jobs": [
             {"id": r.id, "kind": r.kind, "label": r.label, "status": r.status, "progress": r.progress, "current_step": r.current_step, "created_at": r.created_at.isoformat()}
             for r in runs
         ],
-        "usage": get_usage_snapshot(db),
-        "active_accounts": db.query(Account).filter(Account.status == "active").count(),
-        "total_accounts": db.query(Account).count(),
+        "usage": usage,
+        "active_accounts": accounts_query.filter(Account.status == "active").count(),
+        "total_accounts": accounts_query.count(),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 

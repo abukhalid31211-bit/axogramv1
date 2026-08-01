@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import {
   Users, Download, UserPlus, RefreshCw, Globe, Settings, BarChart3,
-  Shield, Megaphone, MessageSquare, LogOut, Send, ChevronLeft,
+  Shield, Megaphone, MessageSquare, LogOut, Send, ChevronLeft, Crown,
 } from "lucide-react";
 import { useNav } from "../nav";
+import { useAuth } from "../auth";
 import { StatCard } from "../ui";
 import { apiFetch, type DashboardSummary, type JobRun, type TodayReport } from "../lib/api";
 
@@ -30,9 +31,13 @@ const toneMap: Record<Tone, { icon: string; card: string }> = {
 
 export function HomeScreen() {
   const { push } = useNav();
+  const { user } = useAuth();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [today, setToday] = useState<TodayReport | null>(null);
   const [activeJobs, setActiveJobs] = useState<JobRun[]>([]);
+  const allowedModules = user?.platform_admin
+    ? modules
+    : modules.filter((m) => (user?.modules ?? []).includes(m.id));
 
   useEffect(() => {
     let mounted = true;
@@ -82,7 +87,20 @@ export function HomeScreen() {
       </div>
       <h2 className="mb-3 text-xs font-bold uppercase tracking-wider text-surface-400">الوحدات</h2>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {modules.map((m) => {
+        {user?.platform_admin && (
+          <button onClick={() => push(["admin"])}
+            className="group card flex items-center gap-4 border-amber-300 bg-amber-50/60 p-5 text-right transition-all hover:-translate-y-0.5 hover:border-amber-400 hover:shadow-[0_4px_20px_-4px_rgba(234,179,8,0.28)]">
+            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-amber-100 text-amber-600 ring-1 ring-amber-300 transition-transform group-hover:scale-105">
+              <Crown className="h-6 w-6" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-bold text-surface-800">👑 لوحة الإدارة</div>
+              <div className="text-xs text-surface-500 mt-0.5">المشتركين، الباقات، الحدود، الطوارئ</div>
+            </div>
+            <ChevronLeft className="h-4 w-4 shrink-0 text-amber-400 transition group-hover:-translate-x-0.5" />
+          </button>
+        )}
+        {allowedModules.map((m) => {
           const Icon = m.icon;
           const t = toneMap[m.tone];
           return (

@@ -11,6 +11,7 @@ ADD_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "accounts": [
         ("pool_id", "INTEGER REFERENCES account_pools(id) ON DELETE SET NULL"),
         ("last_used_at", "TIMESTAMPTZ"),
+        ("owner_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
     ],
     "campaigns": [
         ("message_text", "TEXT"),
@@ -24,6 +25,15 @@ ADD_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("started_at", "TIMESTAMPTZ"),
         ("finished_at", "TIMESTAMPTZ"),
         ("last_error", "TEXT"),
+        ("owner_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
+    ],
+    "users": [
+        ("email", "VARCHAR(160)"),
+        ("plan_name", "VARCHAR(120)"),
+        ("modules_json", "TEXT"),
+        ("quotas_json", "TEXT"),
+        ("expires_at", "TIMESTAMPTZ"),
+        ("suspended", "BOOLEAN DEFAULT FALSE"),
     ],
 }
 

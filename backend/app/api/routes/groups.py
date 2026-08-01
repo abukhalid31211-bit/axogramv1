@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from fastapi.responses import Response
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, get_current_active_user, require_module
 from app.db.models import GroupBlacklist, GroupCategory, TargetGroup, User
 from app.schemas.common import MessageResponse
 from app.schemas.group import (
@@ -23,7 +23,7 @@ from app.schemas.jobs import JobStartResponse
 from app.services import jobrunner
 from app.services.audit import write_audit_log
 
-router = APIRouter(prefix="/groups", tags=["groups"])
+router = APIRouter(prefix="/groups", tags=["groups"], dependencies=[Depends(require_module("campaigns"))])
 
 
 # ==========================================================================

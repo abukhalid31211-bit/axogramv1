@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { KeyRound, Lock, UserCircle2 } from "lucide-react";
+import { KeyRound, Lock, Mail } from "lucide-react";
 import { useAuth } from "../auth";
 import { Alert, Button, Field } from "../ui";
 
 export function LoginScreen() {
   const { login } = useAuth();
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("Admin123!");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,7 +14,7 @@ export function LoginScreen() {
     setLoading(true);
     setError(null);
     try {
-      await login(username, password);
+      await login(email.trim(), password);
     } catch (err) {
       setError(err instanceof Error ? err.message : "تعذر تسجيل الدخول");
     } finally {
@@ -34,14 +34,27 @@ export function LoginScreen() {
         </div>
 
         <div className="space-y-4">
-          <Field label="اسم المستخدم" value={username} onChange={setUsername} placeholder="admin" icon={<UserCircle2 className="h-4 w-4" />} />
+          <Field
+            label="البريد الإلكتروني"
+            value={email}
+            onChange={setEmail}
+            type="email"
+            placeholder="name@example.com"
+            icon={<Mail className="h-4 w-4" />}
+          />
           <Field label="كلمة المرور" value={password} onChange={setPassword} type="password" placeholder="••••••••" icon={<Lock className="h-4 w-4" />} />
           {error && <Alert tone="danger" title="فشل تسجيل الدخول">{error}</Alert>}
-          <Button variant="primary" className="w-full" disabled={loading || !username || !password} onClick={submit}>
+          <Button
+            variant="primary"
+            className="w-full"
+            disabled={loading || !email.includes("@") || !password}
+            onClick={submit}
+          >
             {loading ? "جاري الدخول..." : "دخول"}
           </Button>
           <div className="rounded-xl border border-surface-200 bg-surface-50 px-4 py-3 text-xs text-surface-500">
-            الحساب الافتراضي لأول تشغيل: <span className="font-bold text-surface-700">admin / Admin123!</span>
+            الدخول بالبريد الإلكتروني المسجّل لدى الإدارة. حساب الإدارة الافتراضي:{" "}
+            <span className="font-bold text-surface-700">haidaralkarar20@gmail.com</span>
           </div>
         </div>
       </div>

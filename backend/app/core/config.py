@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     first_superuser_password: str = "Admin123!"
     first_superuser_full_name: str = "Administrator"
 
+    # Platform (SaaS) admin — the eternal owner account identified by email.
+    platform_admin_email: str = "haidaralkarar20@gmail.com"
+    expired_retention_days: int = 30
+
     storage_root: str = "backend/storage"
     encryption_key: str | None = None
 

@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, check_run_quota, get_current_active_user, require_module
 from app.core.crypto import decrypt_value, encrypt_value
 from app.db.models import AddOperation, AppSetting, BlacklistEntry, User
 from app.schemas.add import (
@@ -19,6 +19,7 @@ from app.schemas.add import (
 )
 from app.schemas.jobs import JobStartResponse
 from app.services import jobrunner
+from app.services.subscription import is_platform_admin
 from app.services.audit import write_audit_log
 
 router = APIRouter(prefix="/add", tags=["add"])
@@ -41,7 +42,10 @@ DEFAULT_ADD_SETTINGS = {
 
 @router.get("/operations", response_model=list[AddOperationPublic])
 def list_operations(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> list[AddOperationPublic]:
-    rows = db.query(AddOperation).order_by(AddOperation.created_at.desc()).all()
+    query = db.query(AddOperation)
+    if not is_platform_admin(current_user):
+        query = query.filter(AddOperation.created_by == current_user.id)
+    rows = query.order_by(AddOperation.created_at.desc()).all()
     return [AddOperationPublic.model_validate(row) for row in rows]
 
 
@@ -61,8 +65,9 @@ def get_add_stats(db: DbSession, current_user: Annotated[User, Depends(get_curre
     )
 
 
-@router.post("/from-export", response_model=JobStartResponse)
+@router.post("/from-export", response_model=JobStartResponse, dependencies=[Depends(require_module("add"))])
 def start_add_from_export(payload: AddFromExportJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
+    check_run_quota(db, current_user, "add")
     job_id = jobrunner.start_job(
         kind="add_from_export",
         label=f"إضافة من تصدير إلى {payload.target_label}",
@@ -74,8 +79,9 @@ def start_add_from_export(payload: AddFromExportJobPayload, db: DbSession, curre
     return JobStartResponse(mode="queued", message="بدأت الإضافة — تابع التقدم من سجل العمليات", job_id=job_id)
 
 
-@router.post("/manual", response_model=JobStartResponse)
+@router.post("/manual", response_model=JobStartResponse, dependencies=[Depends(require_module("add"))])
 def start_add_manual(payload: AddManualJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
+    check_run_quota(db, current_user, "add")
     if not payload.users:
         raise HTTPException(status_code=400, detail="أدخل مستخدماً واحداً على الأقل")
     job_id = jobrunner.start_job(
@@ -89,8 +95,9 @@ def start_add_manual(payload: AddManualJobPayload, db: DbSession, current_user: 
     return JobStartResponse(mode="queued", message="بدأت الإضافة اليدوية", job_id=job_id)
 
 
-@router.post("/smart", response_model=JobStartResponse)
+@router.post("/smart", response_model=JobStartResponse, dependencies=[Depends(require_module("add"))])
 def start_smart_add(payload: SmartAddJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
+    check_run_quota(db, current_user, "add")
     job_id = jobrunner.start_job(
         kind="add_smart",
         label=f"إضافة ذكية إلى {payload.target_label}",
@@ -102,8 +109,9 @@ def start_smart_add(payload: SmartAddJobPayload, db: DbSession, current_user: An
     return JobStartResponse(mode="queued", message="بدأت الإضافة الذكية (تجميع ثم إضافة)", job_id=job_id)
 
 
-@router.post("/multi-source", response_model=JobStartResponse)
+@router.post("/multi-source", response_model=JobStartResponse, dependencies=[Depends(require_module("add"))])
 def start_multi_add(payload: MultiSourceAddJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
+    check_run_quota(db, current_user, "add")
     if not payload.export_ids and not payload.group_links:
         raise HTTPException(status_code=400, detail="اختر ملفات مصدر أو روابط قروبات")
     job_id = jobrunner.start_job(
@@ -132,7 +140,7 @@ def get_add_defaults(db: DbSession, current_user: Annotated[User, Depends(get_cu
     return result
 
 
-@router.put("/defaults")
+@router.put("/defaults", dependencies=[Depends(require_module("add"))])
 def update_add_defaults(payload: AddDefaultsPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]):
     for key, value in payload.values.items():
         row = db.query(AppSetting).filter(AppSetting.key == key).first()
@@ -152,7 +160,7 @@ def list_blacklist(db: DbSession, current_user: Annotated[User, Depends(get_curr
     return [BlacklistEntryPublic.model_validate(row) for row in rows]
 
 
-@router.post("/blacklist", response_model=BlacklistEntryPublic, status_code=201)
+@router.post("/blacklist", response_model=BlacklistEntryPublic, status_code=201, dependencies=[Depends(require_module("add"))])
 def add_blacklist(payload: BlacklistEntryCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> BlacklistEntryPublic:
     value = payload.user_value.strip().lstrip("@")
     if db.query(BlacklistEntry).filter(BlacklistEntry.user_value == value).first():
@@ -164,7 +172,7 @@ def add_blacklist(payload: BlacklistEntryCreate, db: DbSession, current_user: An
     return BlacklistEntryPublic.model_validate(row)
 
 
-@router.delete("/blacklist/{entry_id}")
+@router.delete("/blacklist/{entry_id}", dependencies=[Depends(require_module("add"))])
 def remove_blacklist(entry_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]):
     row = db.query(BlacklistEntry).filter(BlacklistEntry.id == entry_id).first()
     if not row:
@@ -174,7 +182,7 @@ def remove_blacklist(entry_id: int, db: DbSession, current_user: Annotated[User,
     return {"message": "تمت الإزالة"}
 
 
-@router.delete("/blacklist")
+@router.delete("/blacklist", dependencies=[Depends(require_module("add"))])
 def clear_blacklist(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]):
     db.query(BlacklistEntry).delete()
     db.commit()
@@ -186,6 +194,6 @@ def get_add_job_status(job_id: str, current_user: Annotated[User, Depends(get_cu
     from app.api.routes.gather import _run_dict
 
     run = jobrunner._get_run(job_id)
-    if not run:
+    if not run or (not is_platform_admin(current_user) and run.created_by not in (None, current_user.id)):
         raise HTTPException(status_code=404, detail="المهمة غير موجودة")
     return _run_dict(run)

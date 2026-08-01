@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from telethon.errors import PhoneCodeInvalidError, SessionPasswordNeededError
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, get_current_active_user, require_module
 from app.core.crypto import decrypt_value, encrypt_value
 from app.db.models import Account, TelegramAuthSession, User
 from app.schemas.account import AccountPublic
@@ -18,9 +18,10 @@ from app.schemas.telegram import (
 )
 from app.services.audit import write_audit_log
 from app.services.settings import get_setting_value, get_telegram_credentials
+from app.services.subscription import is_platform_admin, quota_error
 from app.services.telegram_auth import build_client, phone_to_session_path
 
-router = APIRouter(prefix="/telegram", tags=["telegram"])
+router = APIRouter(prefix="/telegram", tags=["telegram"], dependencies=[Depends(require_module("accounts"))])
 
 
 @router.get("/status", response_model=TelegramStatusResponse)
@@ -144,8 +145,15 @@ async def verify_code(
     session_path = str(phone_to_session_path(payload.phone))
 
     account = db.query(Account).filter(Account.phone == payload.phone).first()
+    if account and account.owner_user_id not in (None, current_user.id) and not is_platform_admin(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="هذا الرقم مرتبط باشتراك مستخدم آخر")
     if not account:
+        quota_msg = quota_error(db, current_user, "account_link")
+        if quota_msg:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=quota_msg)
         account = Account(phone=payload.phone, name=full_name)
+    if account.owner_user_id is None:
+        account.owner_user_id = current_user.id
     account.name = full_name
     account.username = username
     account.status = "active"

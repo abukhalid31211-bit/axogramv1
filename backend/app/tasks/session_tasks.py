@@ -232,7 +232,7 @@ def _register_session(db, session_path: Path, file_name: str, actor_user_id: int
             session_path.unlink(missing_ok=True)
         return "duplicate"
     account_phone = phone or file_name.replace(".session", "").replace("plus_", "+")
-    db.add(Account(phone=account_phone, name=file_name.replace(".session", ""), status="active", session_file_path=str(session_path), last_used_label="الآن (مستورد)", age_label="جديد"))
+    db.add(Account(phone=account_phone, name=file_name.replace(".session", ""), status="active", session_file_path=str(session_path), last_used_label="الآن (مستورد)", age_label="جديد", owner_user_id=actor_user_id))
     db.commit()
     if delete_source:
         session_path.unlink(missing_ok=True)

@@ -85,6 +85,13 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default=RoleEnum.user.value)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # ------- admin-panel / subscription fields -------
+    email: Mapped[str | None] = mapped_column(String(160), unique=True, index=True, nullable=True)
+    plan_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    modules_json: Mapped[str | None] = mapped_column(Text, nullable=True)   # JSON list of allowed module ids
+    quotas_json: Mapped[str | None] = mapped_column(Text, nullable=True)    # JSON dict of per-user limits
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspended: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -94,6 +101,23 @@ class User(Base):
 
     logs: Mapped[list[ActivityLog]] = relationship(back_populates="actor")
     uploads: Mapped[list[UploadFileRecord]] = relationship(back_populates="uploader")
+
+
+class Plan(Base):
+    __tablename__ = "plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    price_label: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    points_json: Mapped[str | None] = mapped_column(Text, nullable=True)     # JSON list of marketing points
+    modules_json: Mapped[str | None] = mapped_column(Text, nullable=True)    # JSON list of module ids
+    quotas_json: Mapped[str | None] = mapped_column(Text, nullable=True)     # JSON dict of limits
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class ProxyPool(Base):
@@ -179,6 +203,7 @@ class Account(Base):
     device_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     session_file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     telegram_user_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -417,6 +442,7 @@ class Campaign(Base):
     delete_after_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
     auto_leave_new_groups: Mapped[bool] = mapped_column(Boolean, default=False)
     account_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # selected account ids
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

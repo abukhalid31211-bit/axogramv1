@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import DbSession, get_current_active_user
 from app.db.models import JobRun, User
+from app.services.subscription import is_platform_admin
 from app.schemas.jobs import JobRunPublic, JobStartResponse
 from app.services import jobrunner
 from app.services.queue import queue_available
@@ -45,6 +46,8 @@ def list_runs(
     limit: int = 50,
 ) -> list[JobRunPublic]:
     query = db.query(JobRun)
+    if not is_platform_admin(current_user):
+        query = query.filter(JobRun.created_by == current_user.id)
     if status_value:
         query = query.filter(JobRun.status == status_value)
     if kind:
@@ -53,16 +56,21 @@ def list_runs(
     return [JobRunPublic.model_validate(row) for row in rows]
 
 
+def _owned_run(run_id: str, user: User) -> JobRun:
+    run = jobrunner._get_run(run_id)
+    if not run or (not is_platform_admin(user) and run.created_by not in (None, user.id)):
+        raise HTTPException(status_code=404, detail="المهمة غير موجودة")
+    return run
+
+
 @router.get("/runs/{run_id}")
 def get_run(run_id: str, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
-    run = jobrunner._get_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="المهمة غير موجودة")
-    return _run_dict(run)
+    return _run_dict(_owned_run(run_id, current_user))
 
 
 @router.post("/runs/{run_id}/pause")
 def pause_run(run_id: str, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
+    _owned_run(run_id, current_user)
     run = jobrunner.set_control(run_id, "pause")
     if not run:
         raise HTTPException(status_code=404, detail="المهمة غير موجودة")
@@ -71,6 +79,7 @@ def pause_run(run_id: str, current_user: Annotated[User, Depends(get_current_act
 
 @router.post("/runs/{run_id}/resume")
 def resume_run(run_id: str, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
+    _owned_run(run_id, current_user)
     run = jobrunner.set_control(run_id, "run")
     if not run:
         raise HTTPException(status_code=404, detail="المهمة غير موجودة")
@@ -79,6 +88,7 @@ def resume_run(run_id: str, current_user: Annotated[User, Depends(get_current_ac
 
 @router.post("/runs/{run_id}/cancel")
 def cancel_run(run_id: str, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
+    _owned_run(run_id, current_user)
     run = jobrunner.set_control(run_id, "cancel")
     if not run:
         raise HTTPException(status_code=404, detail="المهمة غير موجودة")
@@ -86,8 +96,15 @@ def cancel_run(run_id: str, current_user: Annotated[User, Depends(get_current_ac
 
 
 @router.post("/runs/cancel-all")
-def cancel_all_runs(current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
-    count = jobrunner.cancel_all_runs()
+def cancel_all_runs(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
+    if is_platform_admin(current_user):
+        count = jobrunner.cancel_all_runs()
+    else:
+        count = 0
+        for run in jobrunner.get_active_runs():
+            if run.created_by == current_user.id:
+                jobrunner.set_control(run.id, "cancel")
+                count += 1
     return {"message": f"تم إيقاف {count} مهمة نشطة", "cancelled": count}
 
 
@@ -121,7 +138,4 @@ def start_warmup_accounts_job(payload: dict, db: DbSession, current_user: Annota
 
 @router.get("/{job_id}")
 def get_job_status(job_id: str, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
-    run = jobrunner._get_run(job_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="المهمة غير موجودة")
-    return _run_dict(run)
+    return _run_dict(_owned_run(job_id, current_user))

@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     accounts,
     add,
+    admin,
     auth,
     campaigns,
     gather,
@@ -40,3 +41,4 @@ api_router.include_router(campaigns.router)
 api_router.include_router(rotation.router)
 api_router.include_router(security.router)
 api_router.include_router(system.router)
+api_router.include_router(admin.router)

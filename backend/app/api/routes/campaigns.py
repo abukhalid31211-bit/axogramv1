@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, check_run_quota, get_current_active_user, require_module
 from app.db.models import Campaign, CampaignSchedule, MessageTemplate, User
 from app.schemas.campaign import (
     CampaignCreate,
@@ -24,16 +24,28 @@ from app.schemas.campaign import (
 from app.schemas.common import MessageResponse
 from app.schemas.jobs import JobStartResponse
 from app.services import jobrunner
+from app.services.subscription import MODULE_LABELS, is_platform_admin, module_allowed
 from app.services.audit import write_audit_log
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
 
-def _get_campaign(db, campaign_id: int) -> Campaign:
+def _get_campaign(db, campaign_id: int, user: User) -> Campaign:
     row = db.query(Campaign).filter(Campaign.id == campaign_id).first()
-    if not row:
+    if not row or (not is_platform_admin(user) and row.owner_user_id not in (None, user.id)):
         raise HTTPException(status_code=404, detail="الحملة غير موجودة")
     return row
+
+
+def _kind_module(kind: str | None) -> str:
+    return "massdm" if kind == "dm" else "campaigns"
+
+
+def _require_kind_module(user: User, kind: str | None) -> None:
+    module = _kind_module(kind)
+    if not module_allowed(user, module):
+        label = MODULE_LABELS.get(module, module)
+        raise HTTPException(status_code=403, detail=f"🔒 هذه الوحدة غير مشمولة بباقتك — {label} — اطلب الترقية من الإدارة")
 
 
 def _is_locked(db) -> None:
@@ -51,6 +63,8 @@ def list_campaigns(
     status_value: str | None = Query(default=None, alias="status"),
 ) -> list[CampaignPublic]:
     query = db.query(Campaign)
+    if not is_platform_admin(current_user):
+        query = query.filter(Campaign.owner_user_id == current_user.id)
     if kind:
         query = query.filter(Campaign.kind == kind)
     if status_value:
@@ -61,9 +75,11 @@ def list_campaigns(
 
 @router.post("", response_model=CampaignPublic, status_code=status.HTTP_201_CREATED)
 def create_campaign(payload: CampaignCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> CampaignPublic:
+    _require_kind_module(current_user, payload.kind)
     data = payload.model_dump()
     data.pop("created_at", None)
     row = Campaign(**data)
+    row.owner_user_id = current_user.id
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -73,7 +89,10 @@ def create_campaign(payload: CampaignCreate, db: DbSession, current_user: Annota
 
 @router.get("/stats", response_model=CampaignStats)
 def campaign_stats(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> CampaignStats:
-    rows = db.query(Campaign).all()
+    if is_platform_admin(current_user):
+        rows = db.query(Campaign).all()
+    else:
+        rows = db.query(Campaign).filter(Campaign.owner_user_id == current_user.id).all()
     return CampaignStats(
         total=len(rows),
         active=sum(1 for r in rows if r.status == "active"),
@@ -91,7 +110,9 @@ def campaign_stats(db: DbSession, current_user: Annotated[User, Depends(get_curr
 @router.post("/{campaign_id}/start", response_model=JobStartResponse)
 def start_campaign(campaign_id: int, payload: CampaignStartPayload | None, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
     _is_locked(db)
-    campaign = _get_campaign(db, campaign_id)
+    campaign = _get_campaign(db, campaign_id, current_user)
+    _require_kind_module(current_user, campaign.kind)
+    check_run_quota(db, current_user, "dm" if campaign.kind == "dm" else "group")
     if campaign.status == "active":
         raise HTTPException(status_code=409, detail="الحملة تعمل بالفعل")
     scheduled_at = (payload.scheduled_at if payload else None)
@@ -114,7 +135,7 @@ def start_campaign(campaign_id: int, payload: CampaignStartPayload | None, db: D
 
 @router.post("/{campaign_id}/pause", response_model=MessageResponse)
 def pause_campaign(campaign_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
-    campaign = _get_campaign(db, campaign_id)
+    campaign = _get_campaign(db, campaign_id, current_user)
     run = (
         db.query(jobrunner.JobRun)
         .filter(jobrunner.JobRun.entity_type == "campaign", jobrunner.JobRun.entity_id == str(campaign_id), jobrunner.JobRun.status.in_(["queued", "running"]))
@@ -132,7 +153,8 @@ def pause_campaign(campaign_id: int, db: DbSession, current_user: Annotated[User
 
 @router.post("/{campaign_id}/resume", response_model=JobStartResponse)
 def resume_campaign(campaign_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
-    campaign = _get_campaign(db, campaign_id)
+    campaign = _get_campaign(db, campaign_id, current_user)
+    _require_kind_module(current_user, campaign.kind)
     run = (
         db.query(jobrunner.JobRun)
         .filter(jobrunner.JobRun.entity_type == "campaign", jobrunner.JobRun.entity_id == str(campaign_id), jobrunner.JobRun.status == "paused")
@@ -160,7 +182,7 @@ def resume_campaign(campaign_id: int, db: DbSession, current_user: Annotated[Use
 
 @router.post("/{campaign_id}/stop", response_model=MessageResponse)
 def stop_campaign(campaign_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
-    campaign = _get_campaign(db, campaign_id)
+    campaign = _get_campaign(db, campaign_id, current_user)
     runs = (
         db.query(jobrunner.JobRun)
         .filter(jobrunner.JobRun.entity_type == "campaign", jobrunner.JobRun.entity_id == str(campaign_id), jobrunner.JobRun.status.in_(["queued", "running", "paused"]))
@@ -177,7 +199,9 @@ def stop_campaign(campaign_id: int, db: DbSession, current_user: Annotated[User,
 @router.post("/{campaign_id}/retry-failed", response_model=JobStartResponse)
 def retry_failed(campaign_id: int, payload: CampaignRetryPayload | None, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
     _is_locked(db)
-    campaign = _get_campaign(db, campaign_id)
+    campaign = _get_campaign(db, campaign_id, current_user)
+    _require_kind_module(current_user, campaign.kind)
+    check_run_quota(db, current_user, "dm" if campaign.kind == "dm" else "group")
     failed_items = payload.failed_items if payload else []
     job_id = jobrunner.start_job(
         kind="campaign_retry",
@@ -192,7 +216,7 @@ def retry_failed(campaign_id: int, payload: CampaignRetryPayload | None, db: DbS
 
 @router.get("/{campaign_id}/report", response_model=CampaignReport)
 def campaign_report(campaign_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> CampaignReport:
-    campaign = _get_campaign(db, campaign_id)
+    campaign = _get_campaign(db, campaign_id, current_user)
     run = (
         db.query(jobrunner.JobRun)
         .filter(
@@ -215,7 +239,7 @@ def campaign_report(campaign_id: int, db: DbSession, current_user: Annotated[Use
 def campaign_report_pdf(campaign_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> Response:
     from app.services.pdfexport import build_campaign_report_pdf
 
-    campaign = _get_campaign(db, campaign_id)
+    campaign = _get_campaign(db, campaign_id, current_user)
     run = (
         db.query(jobrunner.JobRun)
         .filter(jobrunner.JobRun.entity_type == "campaign", jobrunner.JobRun.entity_id == str(campaign_id), jobrunner.JobRun.status == "done")
@@ -233,7 +257,7 @@ def campaign_report_pdf(campaign_id: int, db: DbSession, current_user: Annotated
 
 @router.get("/{campaign_id}/progress")
 def campaign_progress(campaign_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
-    campaign = _get_campaign(db, campaign_id)
+    campaign = _get_campaign(db, campaign_id, current_user)
     run = (
         db.query(jobrunner.JobRun)
         .filter(jobrunner.JobRun.entity_type == "campaign", jobrunner.JobRun.entity_id == str(campaign_id))
@@ -257,7 +281,8 @@ def campaign_progress(campaign_id: int, db: DbSession, current_user: Annotated[U
 
 @router.post("/{campaign_id}/test-send", response_model=MessageResponse)
 def test_send(campaign_id: int, payload: CampaignTestSendPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
-    campaign = _get_campaign(db, campaign_id)
+    campaign = _get_campaign(db, campaign_id, current_user)
+    _require_kind_module(current_user, campaign.kind)
     if not payload.target:
         raise HTTPException(status_code=400, detail="حدد الهدف (Saved Messages = me / @username / معرف)")
     from app.db.models import Account
@@ -274,7 +299,9 @@ def test_send(campaign_id: int, payload: CampaignTestSendPayload, db: DbSession,
     if not account:
         from app.services.rotation import pick_accounts
 
-        picked = pick_accounts(db, "dm", count=1)
+        from app.services.subscription import owner_scope_for
+
+        picked = pick_accounts(db, campaign.kind, count=1, owner_user_id=owner_scope_for(db, current_user.id))
         account = picked[0] if picked else None
     if not account or not account.session_file_path:
         raise HTTPException(status_code=400, detail="لا يوجد حساب بجلسة متاحة للإرسال التجريبي")
@@ -317,6 +344,7 @@ def list_templates(
 
 @router.post("/templates", response_model=MessageTemplatePublic, status_code=status.HTTP_201_CREATED)
 def create_template(payload: MessageTemplateCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageTemplatePublic:
+    _require_kind_module(current_user, payload.kind)
     row = MessageTemplate(**payload.model_dump())
     db.add(row)
     db.commit()
@@ -329,6 +357,7 @@ def update_template(template_id: int, payload: MessageTemplateUpdate, db: DbSess
     row = db.query(MessageTemplate).filter(MessageTemplate.id == template_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="القالب غير موجود")
+    _require_kind_module(current_user, payload.kind if payload.kind is not None else row.kind)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(row, key, value)
     db.add(row)
@@ -357,6 +386,7 @@ def list_schedules(db: DbSession, current_user: Annotated[User, Depends(get_curr
 
 @router.post("/schedules", response_model=CampaignSchedulePublic, status_code=status.HTTP_201_CREATED)
 def create_schedule(payload: CampaignScheduleCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> CampaignSchedulePublic:
+    _require_kind_module(current_user, payload.kind)
     row = CampaignSchedule(**payload.model_dump())
     db.add(row)
     db.commit()
@@ -391,13 +421,15 @@ def delete_schedule(schedule_id: int, db: DbSession, current_user: Annotated[Use
 
 @router.get("/{campaign_id}", response_model=CampaignPublic)
 def get_campaign(campaign_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> CampaignPublic:
-    return CampaignPublic.model_validate(_get_campaign(db, campaign_id))
+    return CampaignPublic.model_validate(_get_campaign(db, campaign_id, current_user))
 
 
 @router.put("/{campaign_id}", response_model=CampaignPublic)
 def update_campaign(campaign_id: int, payload: CampaignUpdate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> CampaignPublic:
-    row = _get_campaign(db, campaign_id)
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    row = _get_campaign(db, campaign_id, current_user)
+    data = payload.model_dump(exclude_unset=True)
+    _require_kind_module(current_user, data.get("kind", row.kind))
+    for key, value in data.items():
         setattr(row, key, value)
     db.add(row)
     db.commit()
@@ -407,7 +439,7 @@ def update_campaign(campaign_id: int, payload: CampaignUpdate, db: DbSession, cu
 
 @router.post("/{campaign_id}/toggle", response_model=CampaignPublic)
 def toggle_campaign(campaign_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> CampaignPublic:
-    row = _get_campaign(db, campaign_id)
+    row = _get_campaign(db, campaign_id, current_user)
     row.status = "paused" if row.status == "active" else "active"
     db.add(row)
     db.commit()
@@ -417,7 +449,7 @@ def toggle_campaign(campaign_id: int, db: DbSession, current_user: Annotated[Use
 
 @router.delete("/{campaign_id}", response_model=MessageResponse)
 def delete_campaign(campaign_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
-    row = _get_campaign(db, campaign_id)
+    row = _get_campaign(db, campaign_id, current_user)
     name = row.name
     db.delete(row)
     db.commit()

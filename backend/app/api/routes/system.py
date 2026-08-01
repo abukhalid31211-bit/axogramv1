@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, get_current_active_user, require_module, require_platform_admin
 from app.core.config import get_settings
 from app.db.models import Account, ActivityLog, AppSetting, Campaign, MessageTemplate, Proxy, ProxyPool, User
 from app.services.audit import write_audit_log
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/system", tags=["system"])
 settings = get_settings()
 
 
-@router.get("/database/backup")
+@router.get("/database/backup", dependencies=[Depends(require_platform_admin)])
 def database_backup(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]):
     """Full backup: settings + accounts + proxies + campaigns + templates + groups."""
     from sqlalchemy import func
@@ -61,7 +61,7 @@ def database_backup(db: DbSession, current_user: Annotated[User, Depends(get_cur
     )
 
 
-@router.post("/database/restore")
+@router.post("/database/restore", dependencies=[Depends(require_platform_admin)])
 async def database_restore(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], file: UploadFile = File(...)):
     """Restore settings/accounts/proxies/campaigns/templates from a backup file."""
     import json
@@ -118,7 +118,7 @@ async def database_restore(db: DbSession, current_user: Annotated[User, Depends(
     return {"message": "تمت استعادة النسخة الاحتياطية بنجاح", "restored_settings": restored_settings}
 
 
-@router.post("/database/vacuum")
+@router.post("/database/vacuum", dependencies=[Depends(require_platform_admin)])
 def vacuum_database(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]):
     from sqlalchemy import text
 
@@ -130,7 +130,7 @@ def vacuum_database(db: DbSession, current_user: Annotated[User, Depends(get_cur
     return {"message": "تم ضغط قاعدة البيانات"}
 
 
-@router.post("/database/cleanup")
+@router.post("/database/cleanup", dependencies=[Depends(require_platform_admin)])
 def cleanup_logs(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], older_than_days: int = 30):
     from datetime import datetime, timedelta, timezone
 
@@ -141,7 +141,7 @@ def cleanup_logs(db: DbSession, current_user: Annotated[User, Depends(get_curren
     return {"message": f"تم حذف {deleted} سجل قديم"}
 
 
-@router.get("/info")
+@router.get("/info", dependencies=[Depends(require_module("settings"))])
 def system_info(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
     """Real system information (process, storage, DB counts)."""
     import platform

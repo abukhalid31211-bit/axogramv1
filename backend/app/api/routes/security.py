@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, get_current_active_user, require_module
 from app.db.models import Account, AppSetting, SecurityEvent, User
 from app.schemas.common import MessageResponse
 from app.schemas.jobs import JobStartResponse
@@ -25,7 +25,7 @@ from app.schemas.security import (
 from app.services import jobrunner
 from app.services.audit import write_audit_log
 
-router = APIRouter(prefix="/security", tags=["security"])
+router = APIRouter(prefix="/security", tags=["security"], dependencies=[Depends(require_module("security"))])
 
 
 def _set_setting(db, key: str, value: str) -> None:

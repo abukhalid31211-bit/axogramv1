@@ -1,8 +1,11 @@
+import json
+
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.crypto import encrypt_value
 from app.core.security import get_password_hash
-from app.db.models import Account, AppSetting, Campaign, MessageTemplate, Proxy, User
+from app.db.models import Account, AppSetting, Campaign, MessageTemplate, Plan, Proxy, User
 
 
 DEFAULT_SETTINGS = [
@@ -46,6 +49,94 @@ DEFAULT_CAMPAIGNS = [
 ]
 
 
+def _ensure_platform_admin(db: Session, superuser_username: str, superuser_password: str, superuser_full_name: str) -> User:
+    """Guarantee the permanent platform admin exists and carries the admin e-mail.
+
+    Migration from username login: the old `admin` user gets the platform e-mail
+    assigned so it can log in with e-mail+password from now on.
+    """
+    settings = get_settings()
+    email = (settings.platform_admin_email or "").strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    if user:
+        user.role = "admin"
+        user.is_active = True
+        user.suspended = False
+        user.expires_at = None
+        db.add(user)
+        db.commit()
+        return user
+
+    user = db.query(User).filter(User.username == superuser_username).first()
+    if not user:
+        user = (
+            db.query(User)
+            .filter(User.role == "admin")
+            .order_by(User.id.asc())
+            .first()
+        )
+    if not user:
+        user = User(
+            username=superuser_username,
+            full_name=superuser_full_name,
+            hashed_password=get_password_hash(superuser_password),
+            role="admin",
+            is_active=True,
+            email=email,
+        )
+        db.add(user)
+    else:
+        if email and not user.email:
+            user.email = email
+        user.role = "admin"
+        user.is_active = True
+        db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+DEFAULT_PLANS = [
+    {
+        "name": "🟦 مُجمِّع",
+        "price_label": "اقتصادية",
+        "points": ["تجميع أعضاء", "تقارير بسيطة", "3 حسابات"],
+        "modules": ["gather", "reports", "accounts"],
+        "quotas": {"accounts_limit": 3, "gather_daily": 2000},
+    },
+    {
+        "name": "🟩 مُسوِّق",
+        "price_label": "احترافية",
+        "points": ["تجميع + إضافة", "رسائل DM", "10 حسابات"],
+        "modules": ["gather", "add", "massdm", "rotation", "reports", "accounts", "proxy"],
+        "quotas": {"accounts_limit": 10, "gather_daily": 500, "add_daily": 20, "dm_daily": 30},
+    },
+    {
+        "name": "🟨 شاملة",
+        "price_label": "VIP",
+        "points": ["كل الوحدات", "حدود النظام", "50 حساب"],
+        "modules": ["accounts", "gather", "add", "rotation", "proxy", "massdm", "campaigns", "reports", "security", "settings"],
+        "quotas": {"accounts_limit": 50},
+    },
+]
+
+
+def _ensure_default_plans(db: Session) -> None:
+    for item in DEFAULT_PLANS:
+        if db.query(Plan).filter(Plan.name == item["name"]).first():
+            continue
+        db.add(
+            Plan(
+                name=item["name"],
+                price_label=item["price_label"],
+                points_json=json.dumps(item["points"], ensure_ascii=False),
+                modules_json=json.dumps(item["modules"]),
+                quotas_json=json.dumps(item["quotas"]),
+            )
+        )
+    db.commit()
+
+
 def ensure_initial_data(
     db: Session,
     *,
@@ -53,17 +144,8 @@ def ensure_initial_data(
     superuser_password: str,
     superuser_full_name: str,
 ) -> None:
-    if not db.query(User).filter(User.username == superuser_username).first():
-        db.add(
-            User(
-                username=superuser_username,
-                full_name=superuser_full_name,
-                hashed_password=get_password_hash(superuser_password),
-                role="admin",
-                is_active=True,
-            )
-        )
-        db.commit()
+    _ensure_platform_admin(db, superuser_username, superuser_password, superuser_full_name)
+    _ensure_default_plans(db)
 
     for key, value, is_secret, description in DEFAULT_SETTINGS:
         if not db.query(AppSetting).filter(AppSetting.key == key).first():

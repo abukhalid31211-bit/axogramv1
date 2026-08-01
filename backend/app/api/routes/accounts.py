@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from sqlalchemy.orm import Session
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, get_current_active_user, require_module
 from app.db.models import Account, AccountPool, AppSetting, User
 from app.schemas.account import (
     AccountCreate,
@@ -28,8 +28,16 @@ from app.schemas.jobs import JobStartResponse
 from app.services import jobrunner
 from app.services.audit import write_audit_log
 from app.services.rotation import get_usage_snapshot, reset_usage
+from app.services.subscription import is_platform_admin, quota_error
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
+
+
+def _visible_account_or_404(db: Session, account_id: int, user: User) -> Account:
+    account = _visible_account_or_404(db, account_id, current_user)
+    if not is_platform_admin(user) and account.owner_user_id != user.id:
+        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    return account
 
 
 # ==========================================================================
@@ -44,7 +52,7 @@ def list_pools(db: DbSession, current_user: Annotated[User, Depends(get_current_
     return [AccountPoolPublic.model_validate(row) for row in rows]
 
 
-@router.post("/pools", response_model=AccountPoolPublic, status_code=status.HTTP_201_CREATED)
+@router.post("/pools", response_model=AccountPoolPublic, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_module("accounts"))])
 def create_pool(payload: AccountPoolCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPoolPublic:
     if db.query(AccountPool).filter(AccountPool.name == payload.name).first():
         raise HTTPException(status_code=409, detail="اسم المجموعة موجود مسبقاً")
@@ -65,7 +73,7 @@ def get_pool(pool_id: int, db: DbSession, current_user: Annotated[User, Depends(
     return AccountPoolDetail(id=row.id, name=row.name, description=row.description, purpose=row.purpose, created_at=row.created_at, updated_at=row.updated_at, accounts=[AccountPublic.model_validate(a) for a in accounts])
 
 
-@router.put("/pools/{pool_id}", response_model=AccountPoolPublic)
+@router.put("/pools/{pool_id}", response_model=AccountPoolPublic, dependencies=[Depends(require_module("accounts"))])
 def update_pool(pool_id: int, payload: AccountPoolUpdate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPoolPublic:
     row = db.query(AccountPool).filter(AccountPool.id == pool_id).first()
     if not row:
@@ -79,7 +87,7 @@ def update_pool(pool_id: int, payload: AccountPoolUpdate, db: DbSession, current
     return AccountPoolPublic.model_validate(row)
 
 
-@router.delete("/pools/{pool_id}", response_model=MessageResponse)
+@router.delete("/pools/{pool_id}", response_model=MessageResponse, dependencies=[Depends(require_module("accounts"))])
 def delete_pool(pool_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
     row = db.query(AccountPool).filter(AccountPool.id == pool_id).first()
     if not row:
@@ -93,7 +101,7 @@ def delete_pool(pool_id: int, db: DbSession, current_user: Annotated[User, Depen
 
 # ------------------------- Session import -------------------------
 
-@router.post("/import/sessions", response_model=JobStartResponse)
+@router.post("/import/sessions", response_model=JobStartResponse, dependencies=[Depends(require_module("accounts"))])
 async def import_session_files(
     db: DbSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -125,7 +133,7 @@ async def import_session_files(
     return JobStartResponse(mode="queued", message="تم بدء فحص الجلسات واستيراد الصالحة منها", job_id=job_id)
 
 
-@router.post("/import/zip", response_model=JobStartResponse)
+@router.post("/import/zip", response_model=JobStartResponse, dependencies=[Depends(require_module("accounts"))])
 async def import_session_zip(
     db: DbSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -150,7 +158,7 @@ async def import_session_zip(
     return JobStartResponse(mode="queued", message="تم بدء فك الضغط وفحص الجلسات", job_id=job_id)
 
 
-@router.post("/import/string", response_model=JobStartResponse)
+@router.post("/import/string", response_model=JobStartResponse, dependencies=[Depends(require_module("accounts"))])
 def import_string_sessions(payload: SessionImportStringPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
     sessions = [s.strip() for s in payload.sessions if s.strip()]
     if not sessions:
@@ -166,7 +174,7 @@ def import_string_sessions(payload: SessionImportStringPayload, db: DbSession, c
     return JobStartResponse(mode="queued", message="تم بدء فحص وتحويل الجلسات", job_id=job_id)
 
 
-@router.post("/import/text", response_model=JobStartResponse)
+@router.post("/import/text", response_model=JobStartResponse, dependencies=[Depends(require_module("accounts"))])
 def import_text_sessions(payload: SessionImportTextPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
     if not payload.content.strip():
         raise HTTPException(status_code=400, detail="الملف النصي فارغ")
@@ -207,6 +215,8 @@ def list_accounts(
     pool_id: int | None = Query(default=None),
 ) -> list[AccountPublic]:
     query = db.query(Account)
+    if not is_platform_admin(current_user):
+        query = query.filter(Account.owner_user_id == current_user.id)
     if search:
         query = query.filter(Account.name.ilike(f"%{search}%") | Account.phone.ilike(f"%{search}%") | Account.username.ilike(f"%{search}%"))
     if status_value:
@@ -217,11 +227,15 @@ def list_accounts(
     return [AccountPublic.model_validate(row) for row in rows]
 
 
-@router.post("", response_model=AccountPublic, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=AccountPublic, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_module("accounts"))])
 def create_account(payload: AccountCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPublic:
+    quota_msg = quota_error(db, current_user, "account_link")
+    if quota_msg:
+        raise HTTPException(status_code=403, detail=quota_msg)
     if db.query(Account).filter(Account.phone == payload.phone).first():
         raise HTTPException(status_code=409, detail="رقم الهاتف موجود مسبقاً")
     row = Account(**payload.model_dump())
+    row.owner_user_id = current_user.id
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -229,11 +243,9 @@ def create_account(payload: AccountCreate, db: DbSession, current_user: Annotate
     return AccountPublic.model_validate(row)
 
 
-@router.post("/{account_id}/pool/{pool_id}", response_model=AccountPublic)
+@router.post("/{account_id}/pool/{pool_id}", response_model=AccountPublic, dependencies=[Depends(require_module("accounts"))])
 def assign_to_pool(account_id: int, pool_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPublic:
-    account = db.query(Account).filter(Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    account = _visible_account_or_404(db, account_id, current_user)
     if not db.query(AccountPool).filter(AccountPool.id == pool_id).first():
         raise HTTPException(status_code=404, detail="المجموعة غير موجودة")
     account.pool_id = pool_id
@@ -243,11 +255,9 @@ def assign_to_pool(account_id: int, pool_id: int, db: DbSession, current_user: A
     return AccountPublic.model_validate(account)
 
 
-@router.delete("/{account_id}/pool", response_model=AccountPublic)
+@router.delete("/{account_id}/pool", response_model=AccountPublic, dependencies=[Depends(require_module("accounts"))])
 def unassign_from_pool(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPublic:
-    account = db.query(Account).filter(Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    account = _visible_account_or_404(db, account_id, current_user)
     account.pool_id = None
     db.add(account)
     db.commit()
@@ -257,17 +267,13 @@ def unassign_from_pool(account_id: int, db: DbSession, current_user: Annotated[U
 
 @router.get("/{account_id}", response_model=AccountPublic)
 def get_account(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPublic:
-    row = db.query(Account).filter(Account.id == account_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    row = _visible_account_or_404(db, account_id, current_user)
     return AccountPublic.model_validate(row)
 
 
-@router.put("/{account_id}", response_model=AccountPublic)
+@router.put("/{account_id}", response_model=AccountPublic, dependencies=[Depends(require_module("accounts"))])
 def update_account(account_id: int, payload: AccountUpdate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPublic:
-    row = db.query(Account).filter(Account.id == account_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    row = _visible_account_or_404(db, account_id, current_user)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(row, key, value)
     db.add(row)
@@ -277,11 +283,9 @@ def update_account(account_id: int, payload: AccountUpdate, db: DbSession, curre
     return AccountPublic.model_validate(row)
 
 
-@router.delete("/{account_id}", response_model=MessageResponse)
+@router.delete("/{account_id}", response_model=MessageResponse, dependencies=[Depends(require_module("accounts"))])
 def delete_account(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
-    row = db.query(Account).filter(Account.id == account_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    row = _visible_account_or_404(db, account_id, current_user)
     phone = row.phone
     db.delete(row)
     db.commit()
@@ -295,9 +299,7 @@ def delete_account(account_id: int, db: DbSession, current_user: Annotated[User,
 def account_telegram_sessions(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> list[dict]:
     from app.services.security import get_account_sessions
 
-    account = db.query(Account).filter(Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    account = _visible_account_or_404(db, account_id, current_user)
     try:
         return get_account_sessions(db, account)
     except ValueError as exc:
@@ -306,13 +308,11 @@ def account_telegram_sessions(account_id: int, db: DbSession, current_user: Anno
         raise HTTPException(status_code=400, detail=f"تعذر جلب الجلسات: {exc}") from exc
 
 
-@router.post("/{account_id}/telegram-sessions/terminate", response_model=MessageResponse)
+@router.post("/{account_id}/telegram-sessions/terminate", response_model=MessageResponse, dependencies=[Depends(require_module("accounts"))])
 def terminate_telegram_session(account_id: int, payload: dict, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
     from app.services.security import terminate_account_session
 
-    account = db.query(Account).filter(Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    account = _visible_account_or_404(db, account_id, current_user)
     try:
         terminated = terminate_account_session(db, account, hash_value=payload.get("hash"), all_others=bool(payload.get("all_others")))
         write_audit_log(db, action="accounts.sessions.terminate", message=f"إنهاء جلسات ({terminated}) لحساب {account.phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(account_id), level="warn")
@@ -325,13 +325,11 @@ def terminate_telegram_session(account_id: int, payload: dict, db: DbSession, cu
 
 # ------------------------- Profile management -------------------------
 
-@router.put("/{account_id}/profile", response_model=MessageResponse)
+@router.put("/{account_id}/profile", response_model=MessageResponse, dependencies=[Depends(require_module("accounts"))])
 def update_account_profile(account_id: int, payload: ProfileUpdatePayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
     from app.services.security import update_account_profile
 
-    account = db.query(Account).filter(Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    account = _visible_account_or_404(db, account_id, current_user)
     try:
         update_account_profile(
             db,
@@ -353,13 +351,11 @@ def update_account_profile(account_id: int, payload: ProfileUpdatePayload, db: D
         raise HTTPException(status_code=400, detail=f"تعذر التحديث: {exc}") from exc
 
 
-@router.post("/{account_id}/profile/photo", response_model=MessageResponse)
+@router.post("/{account_id}/profile/photo", response_model=MessageResponse, dependencies=[Depends(require_module("accounts"))])
 async def update_account_photo(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], file: UploadFile = File(...)) -> MessageResponse:
     from app.services.security import update_account_photo
 
-    account = db.query(Account).filter(Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    account = _visible_account_or_404(db, account_id, current_user)
     from app.core.config import get_settings as _gs
 
     target = _gs().storage_path / "uploads" / f"photo_{account_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{file.filename or 'photo.jpg'}"
@@ -374,7 +370,7 @@ async def update_account_photo(account_id: int, db: DbSession, current_user: Ann
         raise HTTPException(status_code=400, detail=f"تعذر تغيير الصورة: {exc}") from exc
 
 
-@router.post("/profile/bulk", response_model=JobStartResponse)
+@router.post("/profile/bulk", response_model=JobStartResponse, dependencies=[Depends(require_module("accounts"))])
 def bulk_profile_update(payload: BulkProfilePayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
     job_id = jobrunner.start_job(
         kind="account_profile_bulk",
@@ -394,9 +390,7 @@ def get_account_settings(account_id: int, db: DbSession, current_user: Annotated
     """Load individual account settings from app_settings."""
     from app.services.settings import get_setting_value
 
-    account = db.query(Account).filter(Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    account = _visible_account_or_404(db, account_id, current_user)
     prefix = f"account_{account_id}_"
     return {
         "account_id": account_id,
@@ -417,12 +411,10 @@ def get_account_settings(account_id: int, db: DbSession, current_user: Annotated
     }
 
 
-@router.put("/{account_id}/settings", response_model=MessageResponse)
+@router.put("/{account_id}/settings", response_model=MessageResponse, dependencies=[Depends(require_module("accounts"))])
 def save_account_settings(account_id: int, payload: AccountSettingsPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
     """Save individual account settings to app_settings."""
-    account = db.query(Account).filter(Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    account = _visible_account_or_404(db, account_id, current_user)
     prefix = f"account_{account_id}_"
     _save_setting(db, f"{prefix}gather_limit", str(payload.gather_limit or 500))
     _save_setting(db, f"{prefix}add_limit", str(payload.add_limit or 20))

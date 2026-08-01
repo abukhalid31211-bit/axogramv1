@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy import func
 
-from app.api.deps import DbSession, get_current_active_user
+from app.api.deps import DbSession, check_run_quota, get_current_active_user, require_module
 from app.db.models import GatherExport, GatherTemplate, User
 from app.schemas.gather import (
     GatherCleanJobPayload,
@@ -17,6 +17,7 @@ from app.schemas.gather import (
 )
 from app.schemas.jobs import JobStartResponse
 from app.services import jobrunner
+from app.services.subscription import is_platform_admin
 from app.services.audit import write_audit_log
 
 router = APIRouter(prefix="/gather", tags=["gather"])
@@ -24,14 +25,17 @@ router = APIRouter(prefix="/gather", tags=["gather"])
 
 @router.get("/exports", response_model=list[GatherExportPublic])
 def list_exports(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> list[GatherExportPublic]:
-    rows = db.query(GatherExport).order_by(GatherExport.created_at.desc()).all()
+    query = db.query(GatherExport)
+    if not is_platform_admin(current_user):
+        query = query.filter(GatherExport.created_by == current_user.id)
+    rows = query.order_by(GatherExport.created_at.desc()).all()
     return [GatherExportPublic.model_validate(row) for row in rows]
 
 
 @router.get("/exports/{export_id}/download")
 def download_export(export_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]):
     row = db.query(GatherExport).filter(GatherExport.id == export_id).first()
-    if not row:
+    if not row or (not is_platform_admin(current_user) and row.created_by != current_user.id):
         raise HTTPException(status_code=404, detail="ملف التصدير غير موجود")
     return FileResponse(path=row.file_path, filename=row.file_name)
 
@@ -39,7 +43,7 @@ def download_export(export_id: int, db: DbSession, current_user: Annotated[User,
 @router.delete("/exports/{export_id}")
 def delete_export(export_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict[str, str]:
     row = db.query(GatherExport).filter(GatherExport.id == export_id).first()
-    if not row:
+    if not row or (not is_platform_admin(current_user) and row.created_by != current_user.id):
         raise HTTPException(status_code=404, detail="ملف التصدير غير موجود")
     db.delete(row)
     db.commit()
@@ -54,8 +58,9 @@ def gather_stats(db: DbSession, current_user: Annotated[User, Depends(get_curren
     return GatherStatsResponse(total_exports=total_exports, total_members=total_members, latest_export_at=latest.created_at if latest else None)
 
 
-@router.post("/extract", response_model=JobStartResponse)
+@router.post("/extract", response_model=JobStartResponse, dependencies=[Depends(require_module("gather"))])
 def start_extract(payload: GatherExtractJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
+    check_run_quota(db, current_user, "gather")
     job_id = jobrunner.start_job(
         kind="gather_extract",
         label=f"تجميع من {payload.source_label}",
@@ -67,7 +72,7 @@ def start_extract(payload: GatherExtractJobPayload, db: DbSession, current_user:
     return JobStartResponse(mode="queued", message="بدأ التجميع — تابع التقدم من شاشة السجلات", job_id=job_id)
 
 
-@router.post("/merge", response_model=JobStartResponse)
+@router.post("/merge", response_model=JobStartResponse, dependencies=[Depends(require_module("gather"))])
 def start_merge(payload: GatherMergeJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
     if len(payload.export_ids) < 1:
         raise HTTPException(status_code=400, detail="اختر ملفاً واحداً على الأقل")
@@ -82,7 +87,7 @@ def start_merge(payload: GatherMergeJobPayload, db: DbSession, current_user: Ann
     return JobStartResponse(mode="queued", message="بدأ الدمج", job_id=job_id)
 
 
-@router.post("/clean", response_model=JobStartResponse)
+@router.post("/clean", response_model=JobStartResponse, dependencies=[Depends(require_module("gather"))])
 def start_clean(payload: GatherCleanJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
     if not payload.export_id:
         raise HTTPException(status_code=400, detail="اختر ملف التصدير المراد تنظيفه")
@@ -105,7 +110,7 @@ def list_gather_templates(db: DbSession, current_user: Annotated[User, Depends(g
     return [GatherTemplatePublic.model_validate(row) for row in rows]
 
 
-@router.post("/templates", response_model=GatherTemplatePublic, status_code=201)
+@router.post("/templates", response_model=GatherTemplatePublic, status_code=201, dependencies=[Depends(require_module("gather"))])
 def create_gather_template(payload: GatherTemplateCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> GatherTemplatePublic:
     row = GatherTemplate(**payload.model_dump())
     db.add(row)
@@ -114,7 +119,7 @@ def create_gather_template(payload: GatherTemplateCreate, db: DbSession, current
     return GatherTemplatePublic.model_validate(row)
 
 
-@router.delete("/templates/{template_id}")
+@router.delete("/templates/{template_id}", dependencies=[Depends(require_module("gather"))])
 def delete_gather_template(template_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict[str, str]:
     row = db.query(GatherTemplate).filter(GatherTemplate.id == template_id).first()
     if not row:
@@ -127,12 +132,12 @@ def delete_gather_template(template_id: int, db: DbSession, current_user: Annota
 @router.get("/jobs/{job_id}")
 def gather_job_status(job_id: str, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
     run = jobrunner._get_run(job_id)
-    if not run:
+    if not run or (not is_platform_admin(current_user) and run.created_by not in (None, current_user.id)):
         raise HTTPException(status_code=404, detail="المهمة غير موجودة")
     return _run_dict(run)
 
 
-@router.post("/join-private", response_model=JobStartResponse)
+@router.post("/join-private", response_model=JobStartResponse, dependencies=[Depends(require_module("gather"))])
 def join_private_group(payload: dict, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
     """Join a private invite link then optionally extract members."""
     link = (payload.get("link") or "").strip()
@@ -152,7 +157,7 @@ def join_private_group(payload: dict, db: DbSession, current_user: Annotated[Use
     return JobStartResponse(mode="queued", message="بدأ الانضمام والتجميع", job_id=job_id)
 
 
-@router.post("/search-telegram", response_model=dict)
+@router.post("/search-telegram", response_model=dict, dependencies=[Depends(require_module("gather"))])
 def search_telegram(payload: dict, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
     """Search Telegram for groups/channels by keyword via Telethon."""
     query = (payload.get("query") or "").strip()
