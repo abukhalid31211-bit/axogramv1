@@ -10,6 +10,7 @@ import {
   SectionTitle, Alert, useToast, EmptyState, InlineEdit, StatCard,
   SearchInput, Tabs, ConfirmDialog,
 } from "../ui";
+import { JobProgressCard } from "../lib/job";
 import {
   apiFetch,
   type AddOperationRecord,

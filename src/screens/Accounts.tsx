@@ -1973,8 +1973,13 @@ function HealthScore() {
   const [weakOnly, setWeakOnly] = useState(false);
   const [explain, setExplain] = useState(false);
 
+  const load = async () => {
+    const data = await apiFetch<AccountRecord[]>("/accounts");
+    setRows(data);
+  };
+
   useEffect(() => {
-    apiFetch<AccountRecord[]>("/accounts").then(setRows).finally(() => setLoading(false));
+    load().finally(() => setLoading(false));
   }, []);
 
   const healthData = rows.map((account) => ({

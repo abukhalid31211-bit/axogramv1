@@ -100,6 +100,7 @@ export type AccountRecord = {
   device_model?: string | null;
   age_label?: string | null;
   last_used_label?: string | null;
+  last_used_at?: string | null;
   notes?: string | null;
   session_file_path?: string | null;
   telegram_user_id?: string | null;

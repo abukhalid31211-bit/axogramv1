@@ -1,7 +1,7 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, rate_limit
 from app.core.security import create_access_token, verify_password
 from app.db.models import User
 from app.schemas.auth import LoginRequest, TokenResponse, UserPublic
@@ -11,7 +11,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: DbSession) -> TokenResponse:
+def login(payload: LoginRequest, db: DbSession, request: Request) -> TokenResponse:
+    client_ip = request.client.host if request.client else "unknown"
+    rate_limit(f"login:{client_ip}", limit=10, window_seconds=60)
     user: User | None = db.query(User).filter(User.username == payload.username).first()
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="اسم المستخدم أو كلمة المرور غير صحيحة")
