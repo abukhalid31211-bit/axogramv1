@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw, Settings, ListChecks, Edit3, BarChart3, Eraser, Brain, CalendarClock, Layers, Activity, ShieldAlert, Bell, PauseCircle, Play } from "lucide-react";
 import { useNav } from "../nav";
 import { PageHeader, Button, OptionButton, Table, SectionTitle, useToast, InlineEdit, Checkbox, Field, Progress, ConfirmDialog, StatusChip } from "../ui";
-import { accounts } from "../data";
-import { apiFetch, type RotationAnalytics, type RotationLogRecord, type RotationProfile, type RotationSettings } from "../lib/api";
+import { apiFetch, type RotationAnalytics, type RotationLive, type RotationLogRecord, type RotationProfile, type RotationSettings } from "../lib/api";
 
 export function RotationModule() {
   const { push } = useNav();
@@ -93,7 +92,7 @@ function RotationSettings() {
   }, []);
   const save = () => {
     apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ mode, condition, on_block: onBlock, on_limit: onLimit }) })
-      .then(() => { show("تم حفظ الإعدادات"); push(["rotation"]); }).catch(() => { show("تم الحفظ محلياً"); push(["rotation"]); });
+      .then(() => { show("تم حفظ الإعدادات"); push(["rotation"]); }).catch((err) => { show(err instanceof Error ? err.message : "تعذر الحفظ", "danger"); });
   };
   return (
     <div className="animate-fade">
@@ -151,7 +150,7 @@ function RotationTable() {
   const { push } = useNav();
   const [rows, setRows] = useState<any[]>([]);
   useEffect(() => {
-    apiFetch<any[]>("/rotation/table").then(setRows).catch(() => setRows(accounts.slice(0,5).map((a,i) => ({ position:i+1, phone:a.phone, health:70-i*5, gather:120, add:18, dm:8, status:i===0?"active":"active", next_phone: i<4?accounts[i+1].phone:accounts[0].phone }))));
+    apiFetch<any[]>("/rotation/table").then(setRows).catch(() => setRows([]));
   }, []);
   const live = rows[0];
   return (
@@ -162,7 +161,7 @@ function RotationTable() {
           <StatusChip key={i} status={(i === 0 ? "active" : a.status === "blocked" ? "blocked" : "active") as any} />, a.next_phone ?? "—"])} />
       <div className="mt-3 flex items-center justify-between rounded-xl bg-surface-50 border border-surface-200 px-4 py-3 text-sm">
         <span className="text-surface-500">◀ الحساب النشط الآن</span>
-        <span className="font-bold text-surface-800">{live?.phone ?? accounts[0]?.phone}</span>
+        <span className="font-bold text-surface-800">{live?.phone ?? "—"}</span>
       </div>
       <div className="mt-4"><Button onClick={() => push(["rotation"])}>رجوع</Button></div>
     </div>
@@ -186,7 +185,7 @@ function EditOrder() {
           <OptionButton label="ترتيب عشوائي"                     selected={false} onClick={() => setOrder("4,1,3,5,2")} />
         </div>
         <div className="flex gap-2">
-          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ switch_ops: parseInt(order.split(",")[0] || "5") }) }).then(() => show("تم حفظ الترتيب")).catch(() => show("تم الحفظ محلياً")); push(["rotation"]); }}>حفظ الترتيب</Button>
+          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ switch_ops: parseInt(order.split(",")[0] || "5") }) }).then(() => show("تم حفظ الترتيب")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>حفظ الترتيب</Button>
           <Button onClick={() => push(["rotation"])}>إلغاء</Button>
         </div>
       </div>
@@ -203,7 +202,7 @@ function DailyUsage() {
     <div className="animate-fade">
       <PageHeader title="الاستهلاك اليومي" icon={<BarChart3 className="h-5 w-5" />} />
       <Table columns={["حساب","تجميع","إضافة","رسائل","الحالة","المتبقي"]}
-        rows={(rows.length ? rows : accounts.slice(0,5).map((a,i) => ({ phone:a.phone, gather:120, add:18, dm:8, status:a.status, remaining:500-i*40 }))).map((a,i) => [a.phone,
+        rows={(rows.length ? rows : []).map((a,i) => [a.phone,
           <div key={i} className="min-w-[90px]"><Progress value={i === 1 ? 100 : 60} /></div>,
           a.add, a.dm,
           <StatusChip key={i} status={a.status === "active" ? "active" : "draft"} />, `${a.remaining ?? 500}`])} />
@@ -225,7 +224,7 @@ function ResetCounters() {
       <div className="mx-auto max-w-lg card p-6 space-y-4">
         <p className="text-sm text-surface-600">سيتم تصفير جميع عدادات الاستهلاك اليومي لجميع الحسابات.</p>
         <div className="flex gap-2">
-          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/rotation/reset", { method: "POST" }).then(() => show("تم التصفير")).catch(() => show("تم التصفير محلياً")); push(["rotation"]); }}>تأكيد التصفير</Button>
+          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/rotation/reset", { method: "POST" }).then(() => show("تم التصفير")).catch((err) => show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger")); push(["rotation"]); }}>تأكيد التصفير</Button>
           <Button onClick={() => push(["rotation"])}>إلغاء</Button>
         </div>
       </div>
@@ -281,7 +280,7 @@ function SmartRotation() {
         </div>
       </div>
       <div className="mt-4 flex gap-2">
-        <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ rest_after: parseInt(restCount || "10") }) }).then(() => show("تم حفظ إعدادات التدوير الذكي")).catch(() => show("تم الحفظ محلياً")); push(["rotation"]); }}>حفظ الإعدادات الذكية</Button>
+        <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/rotation/settings", { method: "PUT", body: JSON.stringify({ rest_after: parseInt(restCount || "10") }) }).then(() => show("تم حفظ إعدادات التدوير الذكي")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>حفظ الإعدادات الذكية</Button>
         <Button onClick={() => push(["rotation"])}>رجوع</Button>
       </div>
       {node}
@@ -336,7 +335,7 @@ function RotationProfiles() {
     { id:"new", icon: "🆕", name: "حسابات جديدة (أقل من شهر)", lines: ["تأخير 180-300 ث | 3 عمليات/تبديل", "حد يومي: 5 إضافة/حساب", "تسخين إجباري 7 أيام أولاً"], delay_min:180, delay_max:300, switch_ops:3, rest_after:10, daily_add_limit:5 },
   ]);
   useEffect(() => { apiFetch<RotationProfile[]>("/rotation/profiles").then(setProfiles).catch(() => undefined); }, []);
-  const apply = (p: RotationProfile) => apiFetch(`/rotation/profiles/${p.id}/apply`, { method: "POST" }).then(() => { show(`تم تطبيق ${p.name}`); push(["rotation"]); }).catch(() => { show(`تم تطبيق ${p.name} محلياً`); push(["rotation"]); });
+  const apply = (p: RotationProfile) => apiFetch(`/rotation/profiles/${p.id}/apply`, { method: "POST" }).then(() => { show(`تم تطبيق ${p.name}`); push(["rotation"]); }).catch((err) => { show(err instanceof Error ? err.message : "تعذر التطبيق", "danger"); });
   return (
     <div className="animate-fade">
       <PageHeader title="سيناريوهات التدوير" subtitle="قوالب جاهزة للسيناريوهات الشائعة" icon={<Layers className="h-5 w-5" />} />
@@ -404,41 +403,78 @@ function RotationAnalytics() {
 function LiveMonitor() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [paused, setPaused] = useState(false);
-  const [confirm, setConfirm] = useState(false);
+  const [live, setLive] = useState<RotationLive | null>(null);
   const [logs, setLogs] = useState<RotationLogRecord[]>([]);
-  useEffect(() => { apiFetch<RotationLogRecord[]>("/rotation/logs?limit=10").then(setLogs).catch(() => undefined); }, []);
-  const doSwitch = () => { apiFetch("/rotation/switch", { method: "POST", body: JSON.stringify({ reason: "manual" }) }).then(() => show("تم التبديل")).catch(() => show("تم التبديل محلياً")); };
+
+  const load = async () => {
+    try {
+      const [liveData, logData] = await Promise.all([
+        apiFetch<RotationLive>("/rotation/live"),
+        apiFetch<RotationLogRecord[]>("/rotation/logs?limit=10"),
+      ]);
+      setLive(liveData);
+      setLogs(logData);
+    } catch { /* keep last data */ }
+  };
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(load, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const doSwitch = async () => {
+    try {
+      await apiFetch("/rotation/switch", { method: "POST", body: JSON.stringify({ reason: "manual" }) });
+      show("تم التبديل اليدوي");
+      await load();
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر التبديل", "danger");
+    }
+  };
+
+  const firstUsage = live?.usage[0];
+
   return (
     <div className="animate-fade">
-      <PageHeader title="مراقب التدوير الحي" subtitle="لوحة مراقبة مباشرة" icon={<Activity className="h-5 w-5" />} />
+      <PageHeader title="مراقب التدوير الحي" subtitle="بيانات حية: المهام الجارية + الاستخدام اليومي" icon={<Activity className="h-5 w-5" />} />
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card p-5">
-          <SectionTitle>الحساب النشط الآن</SectionTitle>
-          <div className="flex items-center gap-3">
-            <div className="grid h-12 w-12 place-items-center rounded-full bg-brand-50 text-brand-600 ring-1 ring-brand-200"><Activity className="h-5 w-5" /></div>
-            <div>
-              <div className="text-lg font-bold text-surface-800">{accounts[0]?.phone}</div>
-              <div className="text-xs text-surface-500">العملية: تجميع | منذ التبديل: 00:12:34</div>
-            </div>
+          <SectionTitle>المهام النشطة الآن</SectionTitle>
+          {live?.active_jobs.length === 0 && <p className="text-sm text-surface-500">لا توجد مهام جارية حالياً.</p>}
+          <div className="space-y-2">
+            {live?.active_jobs.map((job) => (
+              <div key={job.id} className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-surface-800">{job.label}</span>
+                  <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">{job.status === "paused" ? "⏸️" : "▶️"} {job.progress}%</span>
+                </div>
+                <div className="mt-1 text-xs text-surface-500">{job.current_step || "..."}</div>
+                <Progress value={job.progress} label="" sub="" />
+              </div>
+            ))}
           </div>
-          <div className="mt-3 rounded-xl bg-surface-50 border border-surface-200 px-4 py-3 text-sm">
-            <div className="flex justify-between"><span className="text-surface-500">العمليات منذ التبديل</span><span className="font-bold">7</span></div>
-            <div className="flex justify-between"><span className="text-surface-500">التبديل القادم</span><span className="font-bold">بعد 3 عمليات أو 14 دقيقة</span></div>
+          <div className="mt-4 rounded-xl bg-surface-50 border border-surface-200 px-4 py-3 text-sm">
+            <div className="flex justify-between"><span className="text-surface-500">حسابات نشطة</span><span className="font-bold">{live?.active_accounts ?? 0}/{live?.total_accounts ?? 0}</span></div>
+            {firstUsage && (
+              <div className="mt-1 flex justify-between"><span className="text-surface-500">الأكثر استخداماً اليوم</span><span className="font-bold">{firstUsage.phone} ({firstUsage.total} عملية)</span></div>
+            )}
           </div>
           <div className="mt-3 space-y-2">
-            <Button variant="primary" className="w-full" onClick={() => { setConfirm(true); }}>🔄 تبديل يدوي الآن</Button>
-            {paused
-              ? <Button variant="primary" className="w-full" onClick={() => setPaused(false)}><Play className="h-4 w-4" /> استئناف التدوير</Button>
-              : <Button variant="warn" className="w-full" onClick={() => setPaused(true)}><PauseCircle className="h-4 w-4" /> إيقاف التدوير مؤقتاً</Button>}
+            <Button variant="primary" className="w-full" onClick={() => void doSwitch()}>🔄 تبديل يدوي الآن</Button>
           </div>
         </div>
         <div className="card p-5">
-          <SectionTitle>آخر 10 تبديلات</SectionTitle>
-          <Table columns={["وقت","من","إلى","السبب"]} rows={(logs.length ? logs : [{ from_phone:"+9665...", to_phone:"+9665...", reason:"FloodWait", switched_at:"2026-07-28T12:41:00Z" }]).map((l) => [new Date(l.switched_at).toLocaleTimeString("ar").slice(0,5), l.from_phone, l.to_phone, l.reason])} />
+          <SectionTitle>استخدام اليوم (حقيقي)</SectionTitle>
+          {live?.usage.length === 0 && <p className="text-sm text-surface-500">لا توجد استخدامات مسجلة اليوم.</p>}
+          <Table columns={["الحساب", "تجميع", "إضافة", "DM", "قروبات", "Flood"]} rows={(live?.usage ?? []).map((u) => [
+            u.phone, String(u.gather), String(u.add), String(u.dm), String(u.group), String(u.flood_waits),
+          ])} />
+          <div className="mt-4">
+            <SectionTitle>آخر التبديلات</SectionTitle>
+            <Table columns={["وقت", "من", "إلى", "السبب"]} rows={logs.map((l) => [new Date(l.switched_at).toLocaleTimeString("ar").slice(0, 5), l.from_phone, l.to_phone, l.reason])} />
+          </div>
         </div>
       </div>
-      <ConfirmDialog open={confirm} title="تبديل يدوي" message="التبديل إلى الحساب التالي في القائمة الآن؟" onConfirm={() => { setConfirm(false); doSwitch(); }} onCancel={() => setConfirm(false)} />
       <div className="mt-4"><Button onClick={() => push(["rotation"])}>رجوع</Button></div>
       {node}
     </div>
@@ -471,7 +507,7 @@ function ExclusionRules() {
         <Checkbox label="استبعاد الحسابات خارج ساعات عملها" checked={rules.hours} onChange={() => toggle("hours")} />
       </div>
       <div className="mt-4 flex gap-2">
-        <Button variant="primary" onClick={() => { apiFetch("/rotation/exclusion", { method: "PUT", body: JSON.stringify({ blocked: rules.blocked, restricted: rules.restricted, health_threshold: rules.health ? parseInt(healthPct) : null, exclude_new: rules.newAccounts, flood_threshold: rules.flood ? parseInt(floodCount) : null, require_proxy: rules.noProxy, respect_hours: rules.hours }) }).then(() => show("تم حفظ قواعد الاستبعاد")).catch(() => show("تم الحفظ محلياً")); push(["rotation"]); }}>💾 حفظ قواعد الاستبعاد</Button>
+        <Button variant="primary" onClick={() => { apiFetch("/rotation/exclusion", { method: "PUT", body: JSON.stringify({ blocked: rules.blocked, restricted: rules.restricted, health_threshold: rules.health ? parseInt(healthPct) : null, exclude_new: rules.newAccounts, flood_threshold: rules.flood ? parseInt(floodCount) : null, require_proxy: rules.noProxy, respect_hours: rules.hours }) }).then(() => show("تم حفظ قواعد الاستبعاد")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>💾 حفظ قواعد الاستبعاد</Button>
         <Button variant="ghost" onClick={() => show("عرض المستبعدين حالياً: +9665... (حظر)")}>📋 عرض المستبعدين</Button>
         <Button onClick={() => push(["rotation"])}>رجوع</Button>
       </div>
@@ -501,7 +537,7 @@ function RotationNotifications() {
         </div>
       </div>
       <div className="mt-4 flex gap-2">
-        <Button variant="primary" onClick={() => { apiFetch("/rotation/notifications", { method: "PUT", body: JSON.stringify({ on_switch: n.onSwitch, on_exclude: n.onExclude, on_all_limit: n.onAllLimit, on_resume: n.onResume, daily: n.daily, stale_minutes: parseInt(minutes || "30") }) }).then(() => show("تم حفظ إعدادات الإشعارات")).catch(() => show("تم الحفظ محلياً")); push(["rotation"]); }}>💾 حفظ الإعدادات</Button>
+        <Button variant="primary" onClick={() => { apiFetch("/rotation/notifications", { method: "PUT", body: JSON.stringify({ on_switch: n.onSwitch, on_exclude: n.onExclude, on_all_limit: n.onAllLimit, on_resume: n.onResume, daily: n.daily, stale_minutes: parseInt(minutes || "30") }) }).then(() => show("تم حفظ إعدادات الإشعارات")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>💾 حفظ الإعدادات</Button>
         <Button onClick={() => push(["rotation"])}>رجوع</Button>
       </div>
       {node}

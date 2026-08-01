@@ -13,9 +13,18 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.storage_path.mkdir(parents=True, exist_ok=True)
-    for child in ["uploads", "exports", "backups", "sessions"]:
+    for child in ["uploads", "exports", "backups", "sessions", "cache"]:
         (settings.storage_path / child).mkdir(parents=True, exist_ok=True)
     init_db()
+    # Inline scheduler thread (used when the app runs without the RQ worker,
+    # e.g. single-container setups); the worker also starts its own loop.
+    if settings.environment != "test":
+        try:
+            from app.services.scheduler import start_scheduler_thread
+
+            start_scheduler_thread()
+        except Exception:
+            pass
     yield
 
 

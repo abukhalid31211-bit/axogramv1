@@ -1,7 +1,6 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from rq.job import Job
 from sqlalchemy import func
 
 from app.api.deps import DbSession, get_current_active_user
@@ -13,16 +12,14 @@ from app.schemas.add import (
     AddManualJobPayload,
     AddOperationPublic,
     AddStatsResponse,
-    AddResult,
     BlacklistEntryCreate,
     BlacklistEntryPublic,
     MultiSourceAddJobPayload,
     SmartAddJobPayload,
 )
-from app.schemas.jobs import JobStartResponse, JobStatusResponse
+from app.schemas.jobs import JobStartResponse
+from app.services import jobrunner
 from app.services.audit import write_audit_log
-from app.services.queue import get_default_queue, queue_available
-from app.tasks.add_tasks import add_from_export_job, add_manual_job, multi_source_add_job, smart_add_job
 
 router = APIRouter(prefix="/add", tags=["add"])
 
@@ -66,134 +63,86 @@ def get_add_stats(db: DbSession, current_user: Annotated[User, Depends(get_curre
 
 @router.post("/from-export", response_model=JobStartResponse)
 def start_add_from_export(payload: AddFromExportJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
-    if payload.run_inline or not queue_available():
-        result = add_from_export_job(export_id=payload.export_id, target_label=payload.target_label, method=payload.method, actor_user_id=current_user.id)
-        return JobStartResponse(mode="finished", message="تم تنفيذ الإضافة مباشرة", result=result)
-
-    job = get_default_queue().enqueue(
-        "app.tasks.add_tasks.add_from_export_job",
-        kwargs={
-            "export_id": payload.export_id,
-            "target_label": payload.target_label,
-            "method": payload.method,
-            "actor_user_id": current_user.id,
-        },
-        job_timeout=900,
-        result_ttl=86400,
+    job_id = jobrunner.start_job(
+        kind="add_from_export",
+        label=f"إضافة من تصدير إلى {payload.target_label}",
+        entity_type="add",
+        entity_id="from_export",
+        actor_user_id=current_user.id,
+        payload={**payload.model_dump(), "actor_user_id": current_user.id},
     )
-    return JobStartResponse(mode="queued", message="تمت إضافة مهمة الإضافة إلى قائمة الانتظار", job_id=job.id)
+    return JobStartResponse(mode="queued", message="بدأت الإضافة — تابع التقدم من سجل العمليات", job_id=job_id)
 
 
 @router.post("/manual", response_model=JobStartResponse)
 def start_add_manual(payload: AddManualJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
-    if payload.run_inline or not queue_available():
-        result = add_manual_job(users=payload.users, target_label=payload.target_label, method=payload.method, actor_user_id=current_user.id)
-        return JobStartResponse(mode="finished", message="تم تنفيذ الإضافة اليدوية مباشرة", result=result)
-
-    job = get_default_queue().enqueue(
-        "app.tasks.add_tasks.add_manual_job",
-        kwargs={
-            "users": payload.users,
-            "target_label": payload.target_label,
-            "method": payload.method,
-            "actor_user_id": current_user.id,
-        },
-        job_timeout=900,
-        result_ttl=86400,
+    if not payload.users:
+        raise HTTPException(status_code=400, detail="أدخل مستخدماً واحداً على الأقل")
+    job_id = jobrunner.start_job(
+        kind="add_manual",
+        label=f"إضافة يدوية إلى {payload.target_label}",
+        entity_type="add",
+        entity_id="manual",
+        actor_user_id=current_user.id,
+        payload={**payload.model_dump(), "actor_user_id": current_user.id},
     )
-    return JobStartResponse(mode="queued", message="تمت إضافة مهمة الإدخال اليدوي إلى قائمة الانتظار", job_id=job.id)
-
-
-@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
-def get_add_job_status(job_id: str, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStatusResponse:
-    if not queue_available():
-        raise HTTPException(status_code=503, detail="قائمة الانتظار غير متاحة حالياً")
-    try:
-        job = Job.fetch(job_id, connection=get_default_queue().connection)
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail="المهمة غير موجودة") from exc
-    return JobStatusResponse(
-        job_id=job.id,
-        status=job.get_status(refresh=True),
-        result=job.result if isinstance(job.result, dict) else None,
-        error=job.exc_info if job.is_failed else None,
-        enqueued_at=job.enqueued_at,
-        ended_at=job.ended_at,
-    )
+    return JobStartResponse(mode="queued", message="بدأت الإضافة اليدوية", job_id=job_id)
 
 
 @router.post("/smart", response_model=JobStartResponse)
 def start_smart_add(payload: SmartAddJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
-    if payload.run_inline or not queue_available():
-        result = smart_add_job(source_label=payload.source_label, target_label=payload.target_label, method=payload.method, limit=payload.limit, actor_user_id=current_user.id)
-        return JobStartResponse(mode="finished", message="تم تنفيذ الإضافة الذكية مباشرة", result=result)
-
-    job = get_default_queue().enqueue(
-        "app.tasks.add_tasks.smart_add_job",
-        kwargs={
-            "source_label": payload.source_label,
-            "target_label": payload.target_label,
-            "method": payload.method,
-            "limit": payload.limit,
-            "actor_user_id": current_user.id,
-        },
-        job_timeout=1200,
-        result_ttl=86400,
+    job_id = jobrunner.start_job(
+        kind="add_smart",
+        label=f"إضافة ذكية إلى {payload.target_label}",
+        entity_type="add",
+        entity_id="smart",
+        actor_user_id=current_user.id,
+        payload={**payload.model_dump(), "actor_user_id": current_user.id},
     )
-    return JobStartResponse(mode="queued", message="تمت إضافة مهمة الإضافة الذكية إلى قائمة الانتظار", job_id=job.id)
+    return JobStartResponse(mode="queued", message="بدأت الإضافة الذكية (تجميع ثم إضافة)", job_id=job_id)
 
 
 @router.post("/multi-source", response_model=JobStartResponse)
-def start_multi_source(payload: MultiSourceAddJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
-    if payload.run_inline or not queue_available():
-        result = multi_source_add_job(export_ids=payload.export_ids, group_links=payload.group_links, target_label=payload.target_label, method=payload.method, deduplicate=payload.deduplicate, actor_user_id=current_user.id)
-        return JobStartResponse(mode="finished", message="تم تنفيذ الإضافة من عدة مصادر مباشرة", result=result)
-
-    job = get_default_queue().enqueue(
-        "app.tasks.add_tasks.multi_source_add_job",
-        kwargs={
-            "export_ids": payload.export_ids,
-            "group_links": payload.group_links,
-            "target_label": payload.target_label,
-            "method": payload.method,
-            "deduplicate": payload.deduplicate,
-            "actor_user_id": current_user.id,
-        },
-        job_timeout=1200,
-        result_ttl=86400,
+def start_multi_add(payload: MultiSourceAddJobPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
+    if not payload.export_ids and not payload.group_links:
+        raise HTTPException(status_code=400, detail="اختر ملفات مصدر أو روابط قروبات")
+    job_id = jobrunner.start_job(
+        kind="add_multi",
+        label=f"إضافة متعددة المصادر إلى {payload.target_label}",
+        entity_type="add",
+        entity_id="multi",
+        actor_user_id=current_user.id,
+        payload={**payload.model_dump(), "actor_user_id": current_user.id},
     )
-    return JobStartResponse(mode="queued", message="تمت إضافة مهمة المصادر المتعددة إلى قائمة الانتظار", job_id=job.id)
+    return JobStartResponse(mode="queued", message="بدأت الإضافة من المصادر المتعددة", job_id=job_id)
 
 
 @router.get("/defaults")
 def get_add_defaults(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for key, default_value in DEFAULT_ADD_SETTINGS.items():
+    result = {}
+    for key, default in DEFAULT_ADD_SETTINGS.items():
         row = db.query(AppSetting).filter(AppSetting.key == key).first()
         if row:
-          try:
-              result[key] = decrypt_value(row.value_encrypted)
-          except Exception:
-              result[key] = default_value
+            try:
+                result[key] = decrypt_value(row.value_encrypted)
+            except Exception:
+                result[key] = default
         else:
-          result[key] = default_value
+            result[key] = default
     return result
 
 
 @router.put("/defaults")
-def update_add_defaults(payload: AddDefaultsPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict[str, str]:
+def update_add_defaults(payload: AddDefaultsPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]):
     for key, value in payload.values.items():
-        if key not in DEFAULT_ADD_SETTINGS:
-            continue
         row = db.query(AppSetting).filter(AppSetting.key == key).first()
         if row:
-            row.value_encrypted = encrypt_value(value)
-            row.is_secret = False
+            row.value_encrypted = encrypt_value(str(value))
             db.add(row)
         else:
-            db.add(AppSetting(key=key, value_encrypted=encrypt_value(value), is_secret=False, description="Add default setting"))
+            db.add(AppSetting(key=key, value_encrypted=encrypt_value(str(value)), is_secret=False))
     db.commit()
-    write_audit_log(db, action="add.defaults.update", message="Updated add default settings", actor_user_id=current_user.id, entity_type="add_defaults", entity_id="global")
+    write_audit_log(db, action="add.defaults.update", message="تحديث الإعدادات الافتراضية للإضافة", actor_user_id=current_user.id, entity_type="add", entity_id="defaults")
     return {"message": "تم حفظ الإعدادات الافتراضية"}
 
 
@@ -203,30 +152,40 @@ def list_blacklist(db: DbSession, current_user: Annotated[User, Depends(get_curr
     return [BlacklistEntryPublic.model_validate(row) for row in rows]
 
 
-@router.post("/blacklist", response_model=BlacklistEntryPublic)
-def create_blacklist_entry(payload: BlacklistEntryCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> BlacklistEntryPublic:
-    row = BlacklistEntry(user_value=payload.user_value, reason=payload.reason, created_by=current_user.id)
+@router.post("/blacklist", response_model=BlacklistEntryPublic, status_code=201)
+def add_blacklist(payload: BlacklistEntryCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> BlacklistEntryPublic:
+    value = payload.user_value.strip().lstrip("@")
+    if db.query(BlacklistEntry).filter(BlacklistEntry.user_value == value).first():
+        raise HTTPException(status_code=409, detail="المستخدم موجود في القائمة السوداء")
+    row = BlacklistEntry(user_value=value, reason=payload.reason, created_by=current_user.id)
     db.add(row)
     db.commit()
     db.refresh(row)
-    write_audit_log(db, action="add.blacklist.create", message=f"Added {payload.user_value} to blacklist", actor_user_id=current_user.id, entity_type="blacklist", entity_id=str(row.id))
     return BlacklistEntryPublic.model_validate(row)
 
 
 @router.delete("/blacklist/{entry_id}")
-def delete_blacklist_entry(entry_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict[str, str]:
+def remove_blacklist(entry_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]):
     row = db.query(BlacklistEntry).filter(BlacklistEntry.id == entry_id).first()
     if not row:
-        raise HTTPException(status_code=404, detail="المدخل غير موجود")
+        raise HTTPException(status_code=404, detail="غير موجود")
     db.delete(row)
     db.commit()
-    write_audit_log(db, action="add.blacklist.delete", message=f"Removed blacklist entry {entry_id}", actor_user_id=current_user.id, entity_type="blacklist", entity_id=str(entry_id), level="warn")
-    return {"message": "تم حذف المدخل"}
+    return {"message": "تمت الإزالة"}
 
 
 @router.delete("/blacklist")
-def clear_blacklist(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict[str, str]:
+def clear_blacklist(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]):
     db.query(BlacklistEntry).delete()
     db.commit()
-    write_audit_log(db, action="add.blacklist.clear", message="Cleared blacklist", actor_user_id=current_user.id, entity_type="blacklist", entity_id="all", level="warn")
     return {"message": "تم مسح القائمة السوداء"}
+
+
+@router.get("/jobs/{job_id}")
+def get_add_job_status(job_id: str, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
+    from app.api.routes.gather import _run_dict
+
+    run = jobrunner._get_run(job_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="المهمة غير موجودة")
+    return _run_dict(run)

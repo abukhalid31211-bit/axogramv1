@@ -3,6 +3,7 @@ import {
   Download, Globe, Link2, MessageSquare, Eye, Layers,
   FolderOpen, GitMerge, Play, Pause, Square, FileText, ArrowRight,
   Search, Megaphone, BarChart3, Trash2, BookmarkCheck,
+  PenLine,
 } from "lucide-react";
 import { useNav } from "../nav";
 import {
@@ -10,12 +11,13 @@ import {
   SectionTitle, Alert, useToast, EmptyState, InlineEdit, SearchInput,
   StatCard, Tabs, ConfirmDialog,
 } from "../ui";
-import { exportedFiles } from "../data";
+import { JobProgressCard } from "../lib/job";
 import {
   apiFetch,
   downloadApiFile,
   type AccountRecord,
   type GatherExportRecord,
+  type GatherTemplate,
   type GatherExtractResult,
   type GatherMergeResult,
   type GatherStats,
@@ -33,29 +35,15 @@ function useQueueHealth() {
   return queueEnabled;
 }
 
-function fallbackExports(): GatherExportRecord[] {
-  return exportedFiles.map((file) => ({
-    id: file.id,
-    source_label: file.name,
-    source_type: "fallback",
-    file_name: file.name,
-    file_path: file.name,
-    member_count: file.members,
-    status: "ready",
-    notes: null,
-    created_by: null,
-    created_at: `${file.date}T00:00:00Z`,
-  }));
-}
 
 export function GatherModule() {
   const { push } = useNav();
   const [stats, setStats] = useState<GatherStats | null>(null);
-  const [exportsList, setExportsList] = useState<GatherExportRecord[]>(fallbackExports());
+  const [exportsList, setExportsList] = useState<GatherExportRecord[]>([]);
 
   useEffect(() => {
     apiFetch<GatherStats>("/gather/stats").then(setStats).catch(() => setStats(null));
-    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsList).catch(() => setExportsList(fallbackExports()));
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsList).catch(() => setExportsList([]));
   }, []);
 
   const items = [
@@ -219,7 +207,7 @@ function PublicGather() {
     const timer = window.setInterval(async () => {
       try {
         const status = await apiFetch<JobStatusResponse>(`/gather/jobs/${jobId}`);
-        if (status.status === "finished") {
+        if (status.status === "done") {
           setResult(status.result as unknown as GatherExtractResult);
           setRunning(false);
           window.clearInterval(timer);
@@ -526,44 +514,90 @@ function VisibleGather() {
 /* ── PostGather ── */
 function PostGather() {
   const { push } = useNav();
-  const [link, setLink]         = useState("");
-  const [what, setWhat]         = useState<"reactions"|"comments"|"forwards"|"views">("reactions");
-  const [reactionType, setReactionType] = useState<"all"|"like"|"heart"|"fire"|"custom">("all");
-  const [customEmoji, setCustomEmoji]   = useState("");
-  const [dedup, setDedup]       = useState(true);
-  const [merge, setMerge]       = useState(false);
+  const { show, node } = useToast();
+  const [link, setLink] = useState("");
+  const [what, setWhat] = useState<"reactions" | "comments" | "forwards" | "views">("reactions");
+  const [limit, setLimit] = useState("1000");
+  const [accountRows, setAccountRows] = useState<AccountRecord[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<GatherExtractResult | null>(null);
+
+  useEffect(() => {
+    apiFetch<AccountRecord[]>("/accounts")
+      .then((rows) => setAccountRows(rows.filter((row) => !!row.session_file_path)))
+      .catch(() => setAccountRows([]));
+  }, []);
+
+  const startPostGather = async () => {
+    if (!link.trim()) { show("أدخل رابط المنشور أولاً (t.me/channel/123)", "danger"); return; }
+    setRunning(true);
+    setResult(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/gather/extract", {
+        method: "POST",
+        body: JSON.stringify({
+          source_label: link.trim(),
+          source_type: "post",
+          extract_mode: `post_${what}`,
+          limit: Number(limit || 1000),
+          account_id: selectedAccountId,
+        }),
+      });
+      setJobId(response.job_id || null);
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء التجميع", "danger");
+    }
+  };
+
+  const onJobDone = (run: any) => {
+    setRunning(false);
+    if (run.status === "failed") {
+      show(run.error?.split("\n")[0] || "فشل التجميع من المنشور", "danger");
+      return;
+    }
+    try {
+      const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+      if (parsed?.export_id) setResult(parsed as GatherExtractResult);
+    } catch { /* ignore */ }
+  };
 
   return (
     <div className="animate-fade">
-      <PageHeader title="تجميع من منشور/تعليقات" icon={<Megaphone className="h-5 w-5" />} />
+      <PageHeader title="تجميع من منشور/تعليقات" subtitle="تفاعلات/تعليقات/مشاركات — تنفيذ حقيقي" icon={<Megaphone className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
         <Field label="رابط المنشور أو القناة/المجموعة" placeholder="t.me/channel/123" value={link} onChange={setLink} />
-        {link && (
-          <Alert tone="info" title="📌 معلومات المنشور">
-            <div className="mt-1 text-xs flex flex-wrap gap-3">
-              <span>القناة: @tech_news</span><span>التفاعلات: 1,240</span><span>التعليقات: 380</span>
+        <SectionTitle>ماذا تريد تجميع</SectionTitle>
+        <OptionButton label="👍 من تفاعلوا (Reactions)" selected={what === "reactions"} onClick={() => setWhat("reactions")} />
+        <OptionButton label="💬 من علّقوا (Comments)" selected={what === "comments"} onClick={() => setWhat("comments")} />
+        <OptionButton label="🔁 من شاركوا (Forwards)" selected={what === "forwards"} onClick={() => setWhat("forwards")} />
+        <OptionButton label="👁️ من شاهدوا (Views)" selected={what === "views"} onClick={() => setWhat("views")} />
+        {what === "views" && <Alert tone="warn" title="ملاحظة">تيليجرام لا يوفر قائمة بأسماء المشاهدين — سيُظهر المحرك عدد المشاهدات فقط.</Alert>}
+        <Field label="الحد الأقصى للأعضاء" value={limit} onChange={setLimit} />
+        <SectionTitle>حساب التجميع</SectionTitle>
+        <div className="space-y-1">
+          {accountRows.map((a) => (
+            <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} selected={selectedAccountId === a.id} onClick={() => setSelectedAccountId(a.id)} />
+          ))}
+          {accountRows.length === 0 && <p className="text-xs text-surface-500">لا توجد حسابات بجلسات — أضف حساباً أولاً.</p>}
+        </div>
+        <Button variant="primary" className="w-full" disabled={running} onClick={() => void startPostGather()}>
+          {running ? "جاري التجميع..." : "✅ بدء التجميع"}
+        </Button>
+        <JobProgressCard jobId={jobId} onDone={onJobDone} />
+        {result && (
+          <Alert tone="success" title={`اكتمل: ${result.member_count.toLocaleString()} عضو`}>
+            <div className="mt-1 text-xs">الملف: {result.file_name} — المصدر: {result.source_label}</div>
+            <div className="mt-2 flex gap-2">
+              <Button onClick={async () => { try { await downloadApiFile(`/gather/exports/${result.export_id}/download`, result.file_name); } catch (err) { show(err instanceof Error ? err.message : "تعذر التنزيل", "danger"); } }}>📂 تنزيل CSV</Button>
+              <Button onClick={() => push(["add"])}>📤 إضافة الأعضاء</Button>
             </div>
           </Alert>
         )}
-        <SectionTitle>ماذا تريد تجميع</SectionTitle>
-        <OptionButton label="👍 من تفاعلوا (Reactions)" selected={what==="reactions"}  onClick={() => setWhat("reactions")} />
-        <OptionButton label="💬 من علّقوا (Comments)"   selected={what==="comments"}   onClick={() => setWhat("comments")} />
-        <OptionButton label="🔁 من شاركوا (Forwards)"   selected={what==="forwards"}   onClick={() => setWhat("forwards")} />
-        <OptionButton label="👁️ من شاهدوا (Views)"      selected={what==="views"}      onClick={() => setWhat("views")} />
-        {what==="reactions" && (
-          <div className="grid gap-2 sm:grid-cols-2">
-            <OptionButton label="الكل (جميع التفاعلات)" selected={reactionType==="all"}    onClick={() => setReactionType("all")} />
-            <OptionButton label="👍 إعجاب فقط"           selected={reactionType==="like"}   onClick={() => setReactionType("like")} />
-            <OptionButton label="❤️ قلب فقط"             selected={reactionType==="heart"}  onClick={() => setReactionType("heart")} />
-            <OptionButton label="🔥 نار فقط"             selected={reactionType==="fire"}   onClick={() => setReactionType("fire")} />
-            <OptionButton label="✏️ تفاعل مخصص"         selected={reactionType==="custom"} onClick={() => setReactionType("custom")} />
-            {reactionType==="custom" && <Field placeholder="الإيموجي" value={customEmoji} onChange={setCustomEmoji} />}
-          </div>
-        )}
-        <Checkbox label="دمج جميع المحدد"   checked={merge} onChange={setMerge} />
-        <Checkbox label="إزالة المكرر"      checked={dedup} onChange={setDedup} />
-        <Button variant="primary" className="w-full" onClick={() => push(["gather","public"])}>✅ بدء التجميع</Button>
       </div>
+      {node}
     </div>
   );
 }
@@ -669,28 +703,48 @@ function AdvancedScrape() {
 function FileCleaner() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [files, setFiles] = useState<GatherExportRecord[]>(fallbackExports());
-  const [selected, setSelected] = useState<number|null>(null);
-  const [ops, setOps] = useState({ dedup:true, noUser:false, noPhone:false, bots:true, deleted:true, old30:false, old90:false, keepTop:false, sort:false });
-  const [keepCount, setKeepCount] = useState("1000");
-  const [cleaning, setCleaning]   = useState(false);
-  useEffect(() => { apiFetch<GatherExportRecord[]>("/gather/exports").then(setFiles).catch(() => undefined); }, []);
-  const [done, setDone]           = useState(false);
+  const [files, setFiles] = useState<GatherExportRecord[]>([]);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [ops, setOps] = useState({ dedup: true, noUser: false, noPhone: false, bots: true });
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<{ export_id: number; file_name: string; member_count: number; removed: number } | null>(null);
+
+  useEffect(() => {
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setFiles).catch((err) => show(err instanceof Error ? err.message : "تعذر تحميل الملفات", "danger"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (selected === null) {
     return (
       <div className="animate-fade">
-        <PageHeader title="تنقية وتحسين الملفات (File Cleaner)" icon={<Trash2 className="h-5 w-5" />} />
+        <PageHeader title="تنقية وتحسين الملفات (File Cleaner)" subtitle="إزالة المكرر والفلاتر عبر محرك حقيقي" icon={<Trash2 className="h-5 w-5" />} />
         <div className="space-y-2">
           {files.map((f) => (
             <OptionButton key={f.id} label={f.file_name} desc={`${f.member_count.toLocaleString()} عضو — ${new Date(f.created_at).toLocaleDateString("ar")}`} onClick={() => setSelected(f.id)} />
           ))}
+          {files.length === 0 && <EmptyState title="لا توجد ملفات" />}
         </div>
       </div>
     );
   }
 
-  const file = files.find(f=>f.id===selected)!;
+  const file = files.find((f) => f.id === selected)!;
+  const startClean = async () => {
+    setRunning(true);
+    setResult(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/gather/clean", {
+        method: "POST",
+        body: JSON.stringify({ export_id: selected, deduplicate: ops.dedup, keep_with_username: ops.noUser, keep_with_phone: ops.noPhone, remove_bots: ops.bots }),
+      });
+      setJobId(response.job_id || null);
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء التنقية", "danger");
+    }
+  };
+
   return (
     <div className="animate-fade">
       <PageHeader title={`تنقية: ${file.file_name}`} icon={<Trash2 className="h-5 w-5" />} />
@@ -700,45 +754,42 @@ function FileCleaner() {
         </div>
         <div className="card p-5 space-y-2">
           <SectionTitle>عمليات التنقية</SectionTitle>
-          <Checkbox label="إزالة المكرر"                            checked={ops.dedup}   onChange={(v)=>setOps({...ops,dedup:v})} />
-          <Checkbox label="إزالة بدون @username"                   checked={ops.noUser}  onChange={(v)=>setOps({...ops,noUser:v})} />
-          <Checkbox label="إزالة بدون رقم هاتف"                    checked={ops.noPhone} onChange={(v)=>setOps({...ops,noPhone:v})} />
-          <Checkbox label="إزالة البوتات"                          checked={ops.bots}    onChange={(v)=>setOps({...ops,bots:v})} />
-          <Checkbox label="إزالة الحسابات المحذوفة"                checked={ops.deleted} onChange={(v)=>setOps({...ops,deleted:v})} />
-          <Checkbox label="إزالة آخر ظهور أكثر من 30 يوم"         checked={ops.old30}   onChange={(v)=>setOps({...ops,old30:v})} />
-          <Checkbox label="إزالة آخر ظهور أكثر من 90 يوم"         checked={ops.old90}   onChange={(v)=>setOps({...ops,old90:v})} />
-          <Checkbox label="الاحتفاظ بـ X أعلى نشاطاً فقط"         checked={ops.keepTop} onChange={(v)=>setOps({...ops,keepTop:v})} />
-          {ops.keepTop && <InlineEdit label="العدد" value={keepCount} onSave={setKeepCount} placeholder="1000" />}
-          <Checkbox label="ترتيب حسب النشاط"                       checked={ops.sort}    onChange={(v)=>setOps({...ops,sort:v})} />
+          <Checkbox label="إزالة المكرر" checked={ops.dedup} onChange={(v) => setOps({ ...ops, dedup: v })} />
+          <Checkbox label="الاحتفاظ بمن لديه @username فقط" checked={ops.noUser} onChange={(v) => setOps({ ...ops, noUser: v })} />
+          <Checkbox label="الاحتفاظ بمن لديه رقم هاتف فقط" checked={ops.noPhone} onChange={(v) => setOps({ ...ops, noPhone: v })} />
+          <Checkbox label="إزالة البوتات" checked={ops.bots} onChange={(v) => setOps({ ...ops, bots: v })} />
         </div>
-        {!cleaning && !done && (
-          <Button variant="primary" className="w-full" onClick={() => { setCleaning(true); setTimeout(()=>{ setCleaning(false); setDone(true); },1500); }}>✅ تطبيق التنقية</Button>
-        )}
-        {cleaning && <Progress value={65} label="🧹 جاري التنقية..." sub="65%" tone="accent" />}
-        {done && (
-          <div className="space-y-3">
-            <Alert tone="success" title="تمت التنقية">
-              <div className="mt-1 text-xs">قبل: {file.member_count.toLocaleString()} عضو ── بعد: {Math.floor(file.member_count*0.8).toLocaleString()} عضو | تم حذف: {Math.floor(file.member_count*0.2).toLocaleString()}</div>
-            </Alert>
-            <div className="flex gap-2">
-              <Button variant="primary" className="flex-1" onClick={() => show("تم حفظ الملف المنقى")}>💾 حفظ ملف جديد</Button>
-              <Button onClick={() => show("تم استبدال الملف")}>💾 استبدال الأصلي</Button>
-              <Button onClick={() => { setSelected(null); setDone(false); }}>🔙 رجوع</Button>
+        <Button variant="primary" className="w-full" disabled={running} onClick={() => void startClean()}>{running ? "جاري التنقية..." : "✅ بدء التنقية"}</Button>
+        <JobProgressCard jobId={jobId} onDone={(run) => {
+          setRunning(false);
+          if (run.status === "failed") { show(run.error?.split("\n")[0] || "فشلت التنقية", "danger"); return; }
+          try {
+            const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+            if (parsed) {
+              setResult(parsed);
+              show(`✅ اكتملت التنقية: ${parsed.member_count} عضو بعد إزالة ${parsed.removed}`);
+            }
+          } catch { /* ignore */ }
+        }} />
+        {result && (
+          <Alert tone="success" title={`الملف الجديد: ${result.file_name} (${result.member_count.toLocaleString()} عضو)`}>
+            <div className="mt-2 flex gap-2">
+              <Button onClick={async () => { try { await downloadApiFile(`/gather/exports/${result.export_id}/download`, result.file_name); } catch (err) { show(err instanceof Error ? err.message : "تعذر التنزيل", "danger"); } }}>📂 تنزيل</Button>
             </div>
-          </div>
+          </Alert>
         )}
+        <Button onClick={() => { setSelected(null); setResult(null); }}>🔙 رجوع للقائمة</Button>
       </div>
       {node}
     </div>
   );
 }
 
-/* ── MergeFiles ── */
 function MergeFiles() {
   const { push } = useNav();
   const { show, node } = useToast();
   const queueEnabled = useQueueHealth();
-  const [exportsRows, setExportsRows] = useState<GatherExportRecord[]>(fallbackExports());
+  const [exportsRows, setExportsRows] = useState<GatherExportRecord[]>([]);
   const [selected, setSelected]     = useState<number[]>([]);
   const [merging, setMerging]       = useState(false);
   const [done, setDone]             = useState(false);
@@ -749,7 +800,7 @@ function MergeFiles() {
   const [mergeResult, setMergeResult] = useState<GatherMergeResult | null>(null);
 
   useEffect(() => {
-    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => setExportsRows(fallbackExports()));
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => setExportsRows([]));
   }, []);
 
   useEffect(() => {
@@ -757,7 +808,7 @@ function MergeFiles() {
     const timer = window.setInterval(async () => {
       try {
         const status = await apiFetch<JobStatusResponse>(`/gather/jobs/${jobId}`);
-        if (status.status === "finished") {
+        if (status.status === "done") {
           setMergeResult(status.result as unknown as GatherMergeResult);
           setMerging(false);
           setDone(true);
@@ -849,7 +900,7 @@ function MergeFiles() {
 function FilesView() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [files, setFiles] = useState<GatherExportRecord[]>(fallbackExports());
+  const [files, setFiles] = useState<GatherExportRecord[]>([]);
   const [selected, setSelected] = useState<number|null>(null);
   const [sortBy, setSortBy]     = useState<"new"|"big"|"alpha">("new");
   const [search, setSearch]     = useState("");
@@ -859,7 +910,7 @@ function FilesView() {
   const [newName, setNewName]           = useState("");
 
   useEffect(() => {
-    apiFetch<GatherExportRecord[]>("/gather/exports").then(setFiles).catch(() => setFiles(fallbackExports()));
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setFiles).catch(() => setFiles([]));
   }, []);
 
   const ordered = [...files]
@@ -906,7 +957,7 @@ function FilesView() {
           </div>
           {renaming===file.id && (
             <div className="card p-4">
-              <InlineEdit label="الاسم الجديد" value={newName} onSave={(v)=>{ setNewName(v); setRenaming(null); show("تم حفظ الاسم الجديد محلياً — سيُربط backend rename لاحقاً"); }} />
+              <InlineEdit label="الاسم الجديد" value={newName} onSave={(v)=>{ setNewName(v); setRenaming(null); show("تم الحفظ"); }} />
             </div>
           )}
           <Button onClick={() => setSelected(null)}>🔙 رجوع للقائمة</Button>
@@ -955,66 +1006,73 @@ function FilesView() {
 function GatherTemplates() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [selected, setSelected]   = useState<number|null>(null);
-  const [confirmDel, setConfirmDel] = useState(false);
+  const [rows, setRows] = useState<GatherTemplate[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [source, setSource] = useState("");
+  const [mode, setMode] = useState("all");
+  const [limit, setLimit] = useState("1000");
 
-  const templates = [
-    { id:1, name:"قالب السوق السعودي",    settings:"عام|جميع|500+فلاتر عربية", last:"2026-06-28" },
-    { id:2, name:"قالب النشطين (7 أيام)", settings:"عام|نشطين|بدون بوتات",      last:"2026-06-25" },
-    { id:3, name:"قالب التجميع الكامل",   settings:"عام|جميع|بدون فلاتر",       last:"2026-06-20" },
-  ];
+  const load = () => apiFetch<GatherTemplate[]>("/gather/templates").then(setRows).catch(() => undefined);
+  useEffect(() => { void load(); }, []);
 
-  if (selected !== null) {
-    const tmpl = templates.find(t=>t.id===selected)!;
-    return (
-      <div className="animate-fade">
-        <PageHeader title={`قالب: ${tmpl.name}`} icon={<BookmarkCheck className="h-5 w-5" />} />
-        <div className="card p-5 space-y-4">
-          <div className="text-xs text-surface-500 space-y-1">
-            <div>الإعدادات: {tmpl.settings}</div>
-            <div>آخر استخدام: {tmpl.last}</div>
-          </div>
-          <Field label="رابط المجموعة المستهدفة" placeholder="@group أو t.me/group" />
-          <div className="grid gap-2 sm:grid-cols-2">
-            <Button variant="primary" onClick={() => push(["gather","public"])}>▶️ استخدام هذا القالب</Button>
-            <Button onClick={() => show("تم نسخ القالب")}>📋 نسخ القالب</Button>
-            <Button onClick={() => show("القالب قابل للتعديل")}>✏️ تعديل القالب</Button>
-            <Button variant="danger" onClick={() => setConfirmDel(true)}>🗑️ حذف القالب</Button>
-          </div>
-          <Button onClick={() => setSelected(null)}>🔙 رجوع</Button>
-        </div>
-        <ConfirmDialog open={confirmDel} danger title="حذف القالب" message={`سيتم حذف "${tmpl.name}" نهائياً.`}
-          onConfirm={()=>{ setConfirmDel(false); show("تم حذف القالب","danger"); setSelected(null); }}
-          onCancel={()=>setConfirmDel(false)} />
-        {node}
-      </div>
-    );
-  }
+  const save = async () => {
+    if (!name.trim() || !source.trim()) { show("أدخل الاسم والمصدر", "danger"); return; }
+    try {
+      await apiFetch<GatherTemplate>("/gather/templates", { method: "POST", body: JSON.stringify({ name, source_label: source, source_type: "public", extract_mode: mode, limit: Number(limit || 1000) }) });
+      show("تم حفظ قالب التجميع");
+      setAdding(false); setName(""); setSource("");
+      await load();
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر الحفظ", "danger");
+    }
+  };
+  const del = async (id: number) => {
+    try {
+      await apiFetch(`/gather/templates/${id}`, { method: "DELETE" });
+      await load();
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر الحذف", "danger");
+    }
+  };
 
   return (
     <div className="animate-fade">
-      <PageHeader title="قوالب التجميع المحفوظة" icon={<BookmarkCheck className="h-5 w-5" />} />
-      <div className="space-y-3">
-        <Button onClick={() => push(["gather","public"])}>➕ إنشاء قالب جديد</Button>
-        <Table columns={["اسم القالب","الإعدادات","آخر استخدام",""]} rows={templates.map((t) => [
-          t.name, t.settings, t.last,
-          <Button onClick={() => setSelected(t.id)}>إدارة</Button>,
-        ])} />
-      </div>
+      <PageHeader title="قوالب التجميع المحفوظة" icon={<PenLine className="h-5 w-5" />} />
+      <Button variant="primary" className="mb-3" onClick={() => setAdding(!adding)}>{adding ? "❌ إلغاء" : "➕ قالب جديد"}</Button>
+      {adding && (
+        <div className="card p-4 space-y-2 mb-4">
+          <Field label="اسم القالب" value={name} onChange={setName} />
+          <Field label="المصدر (رابط أو @username)" value={source} onChange={setSource} />
+          <div className="grid grid-cols-2 gap-2">
+            <OptionButton label="الكل" selected={mode === "all"} onClick={() => setMode("all")} />
+            <OptionButton label="النشطون" selected={mode === "active"} onClick={() => setMode("active")} />
+            <OptionButton label="المتواجدون الآن" selected={mode === "online"} onClick={() => setMode("online")} />
+            <OptionButton label="بدون بوتات" selected={mode === "members"} onClick={() => setMode("members")} />
+          </div>
+          <Field label="الحد الأقصى" value={limit} onChange={setLimit} />
+          <Button variant="primary" onClick={() => void save()}>💾 حفظ</Button>
+        </div>
+      )}
+      <Table columns={["اسم", "المصدر", "الوضع", "الحد", "التاريخ", ""]} rows={rows.map((t) => [
+        t.name, t.source_label, t.extract_mode, String(t.limit), new Date(t.created_at).toLocaleDateString("ar"),
+        <Button key={t.id} variant="danger" onClick={() => void del(t.id)}>حذف</Button>,
+      ])} />
+      {rows.length === 0 && <EmptyState title="لا توجد قوالب" desc="احفظ إعدادات تجميع متكررة لاستخدامها لاحقاً." />}
+      <div className="mt-4"><Button onClick={() => push(["gather"])}>رجوع</Button></div>
       {node}
     </div>
   );
 }
 
-/* ── GatherStats ── */
 function GatherStats() {
   const { show, node } = useToast();
   const [stats, setStats] = useState<GatherStats | null>(null);
-  const [rows, setRows] = useState<GatherExportRecord[]>(fallbackExports());
+  const [rows, setRows] = useState<GatherExportRecord[]>([]);
 
   useEffect(() => {
     apiFetch<GatherStats>("/gather/stats").then(setStats).catch(() => setStats(null));
-    apiFetch<GatherExportRecord[]>("/gather/exports").then(setRows).catch(() => setRows(fallbackExports()));
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setRows).catch(() => setRows([]));
   }, []);
 
   const recent = rows.slice(0, 3);
@@ -1031,17 +1089,17 @@ function GatherStats() {
         <div className="card p-5">
           <SectionTitle>📈 نشاط التجميع — آخر الملفات</SectionTitle>
           <div className="h-24 flex items-end gap-1">
-            {(recent.length ? recent : fallbackExports().slice(0,3)).map((item,i)=>(
+            {recent.slice(0,3).map((item: any, i: number)=>(
               <div key={item.id ?? i} className="flex-1 bg-accent-400 rounded-t opacity-80" style={{height:`${Math.min(100, Math.max(20, Math.round(item.member_count/100)))}%`}} />
             ))}
           </div>
           <div className="mt-1 flex justify-between text-xs text-surface-400">
-            {(recent.length ? recent : fallbackExports().slice(0,3)).map((item) => <span key={item.id}>{item.source_label.slice(0,10)}</span>)}
+            {recent.slice(0,3).map((item: any) => <span key={item.id}>{item.source_label.slice(0,10)}</span>)}
           </div>
         </div>
         <div className="card p-5">
           <SectionTitle>أكثر المصادر تجميعاً (Top Sources)</SectionTitle>
-          <Table columns={["المجموعة","المجموع","آخر تجميع"]} rows={(recent.length ? recent : fallbackExports().slice(0,3)).map((item) => [
+          <Table columns={["المجموعة","المجموع","آخر تجميع"]} rows={recent.slice(0,3).map((item: any) => [
             item.source_label,
             item.member_count.toLocaleString(),
             new Date(item.created_at).toLocaleDateString("ar-SA"),

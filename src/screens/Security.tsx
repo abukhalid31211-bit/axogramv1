@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Shield, Ban, Gauge, ShieldCheck, Brush, Activity, Archive, ScanSearch, Smartphone, KeyRound, Lock, Siren, Bell, FileBarChart, Play } from "lucide-react";
 import { useNav } from "../nav";
-import { PageHeader, Button, Field, Checkbox, OptionButton, Progress, Table, SectionTitle, Alert, ConfirmDialog, useToast, EmptyState, InlineEdit } from "../ui";
-import { blacklist as mockBlacklist } from "../data";
-import { apiFetch, type AccountRecord, type BlacklistEntryRecord, type DeviceSession, type SecurityAuditResult, type SecurityEventRecord, type SecurityReport, type SecurityStatus } from "../lib/api";
+import { PageHeader, Button, Field, Checkbox, OptionButton, Progress, Table, SectionTitle, Alert, ConfirmDialog, useToast, EmptyState, InlineEdit, Spinner } from "../ui";
+import { JobProgressCard } from "../lib/job";
+import { apiFetch, downloadApiFile, type AccountRecord, type BlacklistEntryRecord, type DeviceSession, type SecurityAuditResult, type SecurityEventRecord, type SecurityReport, type SecurityStatus } from "../lib/api";
 
 function useAccounts() {
   const [rows, setRows] = useState<AccountRecord[]>([]);
@@ -79,7 +79,7 @@ export function SecurityScreen({ sub }: { sub: string }) {
 function Blacklist() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [rows, setRows] = useState<BlacklistEntryRecord[]>(mockBlacklist as unknown as BlacklistEntryRecord[]);
+  const [rows, setRows] = useState<BlacklistEntryRecord[]>([]);
   const [adding, setAdding] = useState(false);
   const [val, setVal]       = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
@@ -193,7 +193,7 @@ function SmartLimits() {
       <div className="mt-4 flex flex-wrap gap-2">
         <Button variant="primary" disabled={applying} onClick={() => { setApplying(true); setTimeout(() => { setApplying(false); show("تم تطبيق الحدود الموصى بها على كل الحسابات"); }, 1200); }}>{applying ? "جاري التطبيق..." : "تطبيق الحدود الموصى بها"}</Button>
         <Button onClick={() => setShowImpact(!showImpact)}>📊 عرض تأثير الحدود الحالية</Button>
-        <Button onClick={() => { apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key: "security_level", value: level, is_secret: false, description: "security level" }] }) }).then(() => show("تم حفظ إعدادات الحدود الذكية")).catch(() => show("تم الحفظ محلياً")); push(["security"]); }}>💾 حفظ إعدادات الحدود الذكية</Button>
+        <Button onClick={() => { apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key: "security_level", value: level, is_secret: false, description: "security level" }] }) }).then(() => show("تم حفظ إعدادات الحدود الذكية")).catch((err) => show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger")); push(["security"]); }}>💾 حفظ إعدادات الحدود الذكية</Button>
         <Button onClick={() => push(["security"])}>رجوع</Button>
       </div>
       {node}
@@ -218,34 +218,47 @@ function CleanAccounts() {
   const allAccounts = useAccounts();
   const [scope, setScope] = useState("all");
   const [keepCount, setKeepCount] = useState("20");
-  const [channelsOnly, setChannelsOnly] = useState(false);
-  const [delAge, setDelAge] = useState("7");
+  const [delAge, setDelAge] = useState("0");
   const [clearChat, setClearChat] = useState(false);
-  const [clearContacts, setClearContacts] = useState(false);
   const [delContacts, setDelContacts] = useState(false);
   const [resetSessions, setResetSessions] = useState(false);
   const [clearCache, setClearCache] = useState(false);
-  const [delay, setDelay] = useState("10-20");
   const [running, setRunning] = useState(false);
-  const [paused, setPaused] = useState(false);
-  const [done, setDone]       = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<any>(null);
   const [selected, setSelected] = useState<number[]>([]);
 
-  const start = () => {
-    setRunning(true); setProgress(0);
-    const t = setInterval(() => { setProgress((p) => { if (p >= 100) { clearInterval(t); setRunning(false); setDone(true); return 100; } return p + 5; }); }, 150);
+  const start = async () => {
+    setRunning(true);
+    setResult(null);
+    try {
+      const response = await apiFetch<{ job_id: string }>("/security/cleanup", {
+        method: "POST",
+        body: JSON.stringify({
+          account_ids: scope === "manual" ? selected : null,
+          keep_recent_groups: Number(keepCount || 0),
+          delete_messages_older_days: delAge === "0" ? null : Number(delAge),
+          clear_chat_history: clearChat,
+          delete_contacts: delContacts,
+          reset_damaged: resetSessions,
+          clear_cache: clearCache,
+        }),
+      });
+      setJobId(response.job_id);
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء التنظيف", "danger");
+    }
   };
-  const toggleSel = (id: number) => setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  const toggleSel = (id: number) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
 
   return (
     <div className="animate-fade">
-      <PageHeader title="تنظيف الحسابات (Account Cleanup)" icon={<Brush className="h-5 w-5" />} />
+      <PageHeader title="تنظيف الحسابات (Account Cleanup)" subtitle="مغادرة قروبات وحذف رسائل وجهات اتصال — تنفيذ حقيقي" icon={<Brush className="h-5 w-5" />} />
       <div className="mx-auto max-w-2xl card p-6 space-y-4">
         <SectionTitle>👥 اختيار الحسابات للتنظيف</SectionTitle>
         <div className="space-y-2">
           <OptionButton label="✅ جميع الحسابات" selected={scope === "all"} onClick={() => setScope("all")} />
-          <OptionButton label="👥 مجموعة محددة" selected={scope === "group"} onClick={() => setScope("group")} />
           <OptionButton label="✋ اختيار يدوي" selected={scope === "manual"} onClick={() => setScope("manual")} />
         </div>
         {scope === "manual" && (
@@ -256,46 +269,45 @@ function CleanAccounts() {
         <SectionTitle>اختر عمليات التنظيف</SectionTitle>
         <div className="space-y-2">
           <div className="flex items-center gap-2">
-            <Checkbox label="مغادرة مجموعات عشوائية غير ضرورية" checked={keepCount !== "0"} onChange={(v) => setKeepCount(v ? "20" : "0")} />
-            <Field label="الاحتفاظ بأحدث" value={keepCount} onChange={setKeepCount} />
+            <Checkbox label="مغادرة مجموعات عشوائية غير ضرورية (الاحتفاظ بأحدث)" checked={keepCount !== "0"} onChange={(v) => setKeepCount(v ? "20" : "0")} />
+            <Field label="" value={keepCount} onChange={setKeepCount} />
           </div>
-          <Checkbox label="مغادرة القنوات العشوائية فقط" checked={channelsOnly} onChange={setChannelsOnly} />
           <div className="flex items-center gap-2">
             <Checkbox label="حذف الرسائل المرسلة في القروبات أقدم من" checked={delAge !== "0"} onChange={(v) => setDelAge(v ? "7" : "0")} />
             <Field label="أيام" value={delAge} onChange={setDelAge} />
           </div>
           <Checkbox label="مسح سجل الرسائل الخاصة (Chat History)" checked={clearChat} onChange={setClearChat} />
-          {clearChat && <Checkbox label="مسح مع جهات الاتصال المضافة فقط" checked={clearContacts} onChange={setClearContacts} />}
           <Checkbox label="حذف جهات الاتصال المضافة آلياً" checked={delContacts} onChange={setDelContacts} />
           <Checkbox label="إعادة ضبط الجلسات المتضررة" checked={resetSessions} onChange={setResetSessions} />
           <Checkbox label="مسح بيانات الكاش المحلية" checked={clearCache} onChange={setClearCache} />
         </div>
-        <SectionTitle>إعدادات التنظيف</SectionTitle>
-        <Field label="تأخير بين كل إجراء (ث)" value={delay} onChange={setDelay} />
-        {!running && !done && <Button variant="primary" className="w-full" onClick={start}>✅ بدء التنظيف</Button>}
-        {running && (
-          <div className="space-y-2">
-            <Progress value={progress} label="🧹 جاري التنظيف..." sub={`${progress}% [${Math.floor(progress / 8) + 1}/12]`} tone="warn" />
-            <div className="text-xs text-surface-500">الحساب الحالي: +96650... | مغادرة مجموعة | تقدم حي</div>
-            <div className="flex gap-2">
-              {!paused && <Button variant="warn" onClick={() => setPaused(true)}>⏸️ إيقاف مؤقت</Button>}
-              {paused && <Button variant="primary" onClick={() => setPaused(false)}>▶️ متابعة</Button>}
-              <Button variant="danger" onClick={() => { setRunning(false); setDone(true); }}>⏹️ إيقاف وحفظ</Button>
+        <Button variant="primary" className="w-full" disabled={running} onClick={() => void start()}>
+          {running ? "جاري التنظيف..." : "✅ بدء التنظيف"}
+        </Button>
+        <JobProgressCard jobId={jobId} onDone={(run) => {
+          setRunning(false);
+          if (run.status === "failed") { show(run.error?.split("\n")[0] || "فشل التنظيف", "danger"); return; }
+          try {
+            const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+            if (parsed) {
+              setResult(parsed);
+              show("✅ اكتمل التنظيف");
+            }
+          } catch { /* ignore */ }
+        }} />
+        {result && (
+          <Alert tone="success" title="اكتمل التنظيف">
+            <div className="mt-1 text-xs space-y-1">
+              <div>مغادرة {result.summary.left_groups} مجموعة</div>
+              <div>حذف {result.summary.deleted_messages} رسالة</div>
+              <div>مسح {result.summary.cleared_chats} محادثة خاصة</div>
+              <div>حذف {result.summary.deleted_contacts} جهة اتصال</div>
+              <div>إعادة ضبط {result.summary.reset_sessions} جلسة</div>
             </div>
-          </div>
-        )}
-        {done && (
-          <div className="space-y-2">
-            <Alert tone="success" title="اكتمل التنظيف">
-              <div className="mt-1 text-xs">ملخص: مغادرة 14 مجموعة | حذف 320 رسالة | إعادة ضبط 2 جلسة</div>
-            </Alert>
-            <div className="flex gap-2">
-              <Button onClick={() => show("التقرير المفصل")}>📊 عرض التقرير المفصل</Button>
-              <Button onClick={() => push(["security"])}>🔙 رجوع</Button>
-            </div>
-          </div>
+          </Alert>
         )}
       </div>
+      <div className="mt-4"><Button onClick={() => push(["security"])}>رجوع</Button></div>
       {node}
     </div>
   );
@@ -305,47 +317,68 @@ function BanMonitor() {
   const { push } = useNav();
   const { show, node } = useToast();
   const [enabled, setEnabled] = useState(false);
-  const [interval, setInterval] = useState("15");
-  const [action, setAction] = useState("remove");
-  const [tgNotify, setTgNotify] = useState(true);
-  const [sound, setSound] = useState(false);
+  const [intervalMin, setIntervalMin] = useState("15");
+  const [action, setAction] = useState("remove_rotation");
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ enabled: boolean; interval_minutes: number; action: string; last_run?: string | null } | null>(null);
+
+  const load = () => apiFetch<any>("/security/ban-monitor/status").then(setStatus).catch(() => undefined);
+  useEffect(() => { void load(); }, []);
+
+  useEffect(() => {
+    if (status) {
+      setEnabled(status.enabled);
+      setIntervalMin(String(status.interval_minutes));
+      setAction(status.action);
+    }
+  }, [status]);
+
+  const save = async () => {
+    try {
+      await apiFetch("/security/ban-monitor/settings", {
+        method: "POST",
+        body: JSON.stringify({ enabled, interval_minutes: Number(intervalMin), action }),
+      });
+      show("تم حفظ إعدادات مراقب الحظر — يعمل تلقائياً عبر المجدول");
+      void load();
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر الحفظ", "danger");
+    }
+  };
+
+  const runNow = async () => {
+    try {
+      const response = await apiFetch<{ job_id: string }>("/security/ban-monitor/run", { method: "POST", body: JSON.stringify({}) });
+      setJobId(response.job_id);
+      show("بدأ الفحص الفوري للحظر");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر بدء الفحص", "danger");
+    }
+  };
 
   return (
     <div className="animate-fade">
-      <PageHeader title="مراقب الحظر الحي" icon={<Activity className="h-5 w-5" />} />
+      <PageHeader title="مراقب الحظر الحي" subtitle="فحص دوري حقيقي لكل الحسابات وإجراءات تلقائية" icon={<Activity className="h-5 w-5" />} />
       <div className="mx-auto max-w-2xl card p-6 space-y-4">
         <Alert tone={enabled ? "success" : "info"} title={enabled ? "حالة المراقبة: 🟢 نشطة" : "حالة المراقبة: ⭕ متوقفة"}>
-          {enabled && <div className="mt-1 text-xs">آخر فحص: قبل 2 دقيقة | التالي: بعد {interval} دقيقة</div>}
+          {status?.last_run && <div className="mt-1 text-xs">آخر فحص: {new Date(status.last_run).toLocaleString("ar")}</div>}
         </Alert>
         <div className="flex flex-wrap gap-2">
-          {!enabled && <Button variant="primary" icon={<Play className="h-4 w-4" />} onClick={() => setEnabled(true)}>▶️ تفعيل المراقبة المستمرة</Button>}
-          {enabled && <Button variant="danger" onClick={() => setEnabled(false)}>⏹️ إيقاف المراقبة</Button>}
+          <Button variant="primary" onClick={() => void runNow()}>🔍 فحص الآن</Button>
+          <JobProgressCard jobId={jobId} onDone={(run) => { setJobId(null); if (run.status === "failed") show(run.error?.split("\n")[0] || "فشل الفحص", "danger"); else show("اكتمل الفحص — راجع تقارير الأمان"); }} />
         </div>
-        {enabled && (
-          <div className="rounded-xl bg-surface-50 border border-surface-200 p-3">
-            <div className="mb-2 text-xs font-bold text-surface-500">جدول حالة الحسابات (حي)</div>
-            <Table columns={["حساب","الحالة","منذ متى","الإجراء"]} rows={[
-              ["+966501234567","نشط ✅","—","—"],
-              ["+966552345678","مقيد ⚠️","منذ 3 ساعات","مراقبة"],
-              ["+966563456789","محظور ⛔","منذ يوم","إزالة من التدوير"],
-            ]} />
-          </div>
-        )}
         <SectionTitle>إعدادات المراقبة</SectionTitle>
         <div className="grid gap-2 sm:grid-cols-3">
-          {[["5","كل 5 د"],["15","⭐ كل 15 د"],["30","كل 30 د"]].map(([id,label]) => <OptionButton key={id} label={label} selected={interval === id} onClick={() => setInterval(id)} />)}
+          {[["5", "كل 5 د"], ["15", "⭐ كل 15 د"], ["30", "كل 30 د"], ["60", "كل ساعة"]].map(([id, label]) => <OptionButton key={id} label={label} selected={intervalMin === id} onClick={() => setIntervalMin(id)} />)}
         </div>
         <SectionTitle>عند اكتشاف حظر</SectionTitle>
         <OptionButton label="🔔 إشعار فوري فقط" selected={action === "notify"} onClick={() => setAction("notify")} />
-        <OptionButton label="⭐🔔 إشعار + إزالة من التدوير" selected={action === "remove"} onClick={() => setAction("remove")} />
-        <OptionButton label="🔔 إشعار + إزالة + إيقاف مؤقت 1 ساعة" selected={action === "pause"} onClick={() => setAction("pause")} />
-        <OptionButton label="🔔 إشعار + إيقاف جميع العمليات" selected={action === "stop"} onClick={() => setAction("stop")} />
-        <div className="flex flex-wrap gap-2">
-          <Checkbox label="إشعار تيليجرام فوري عند الحظر" checked={tgNotify} onChange={setTgNotify} />
-          <Checkbox label="صوت تنبيه" checked={sound} onChange={setSound} />
-        </div>
-        <Button variant="primary" className="w-full" onClick={() => { show("تم حفظ إعدادات المراقبة"); push(["security"]); }}>💾 حفظ إعدادات المراقبة</Button>
+        <OptionButton label="⭐🔔 إشعار + إزالة من التدوير" selected={action === "remove_rotation"} onClick={() => setAction("remove_rotation")} />
+        <OptionButton label="🔔 إشعار + إيقاف مؤقت" selected={action === "pause_hour"} onClick={() => setAction("pause_hour")} />
+        <OptionButton label="🔔 إشعار + إيقاف جميع العمليات" selected={action === "stop_all"} onClick={() => setAction("stop_all")} />
+        <Button variant="primary" className="w-full" onClick={() => void save()}>💾 حفظ إعدادات المراقبة</Button>
       </div>
+      <div className="mt-4"><Button onClick={() => push(["security"])}>رجوع</Button></div>
       {node}
     </div>
   );
@@ -354,30 +387,57 @@ function BanMonitor() {
 function Backup() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
   const [toggles, setToggles] = useState({ sessions: true, settings: true, db: false });
-  const [path, setPath]       = useState("./backup/");
-  const [running, setRunning] = useState(false);
-  const [done, setDone]       = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [restoring, setRestoring] = useState(false);
+
+  const runBackup = async () => {
+    try {
+      await downloadApiFile("/system/database/backup", `axogram-backup-${new Date().toISOString().slice(0, 10)}.json`);
+      show("✅ تم تنزيل النسخة الاحتياطية الكاملة (الإعدادات + الحسابات + البروكسيات + الحملات + القوالب)");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر النسخ الاحتياطي", "danger");
+    }
+  };
+
+  const restore = async () => {
+    if (!file) return;
+    setRestoring(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const response = await apiFetch<{ message: string }>("/system/database/restore", { method: "POST", body: form });
+      show(response.message);
+      setFile(null);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر الاستعادة", "danger");
+    } finally {
+      setRestoring(false);
+    }
+  };
+
   return (
     <div className="animate-fade">
-      <PageHeader title="نسخ احتياطي" icon={<Archive className="h-5 w-5" />} />
+      <PageHeader title="نسخ احتياطي واستعادة" subtitle="نسخة JSON كاملة + جلسات عبر ZIP" icon={<Archive className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-3">
-        <Checkbox label="نسخ الجلسات"         checked={toggles.sessions} onChange={(v) => setToggles({ ...toggles, sessions: v })} />
-        <Checkbox label="نسخ الإعدادات"       checked={toggles.settings} onChange={(v) => setToggles({ ...toggles, settings: v })} />
-        <Checkbox label="نسخ قواعد البيانات"  checked={toggles.db}       onChange={(v) => setToggles({ ...toggles, db: v })} />
-        <InlineEdit label="مسار مجلد النسخ" value={path} onSave={setPath} placeholder="./backup/" />
-        {!running && !done && <Button variant="primary" className="w-full" onClick={() => { setRunning(true); setTimeout(() => { setRunning(false); setDone(true); }, 1500); }}>بدء النسخ الاحتياطي</Button>}
-        {running && <Progress value={80} label="جاري النسخ..." sub="80%" />}
-        {done && (
-          <div className="space-y-3">
-            <Alert tone="success" title="اكتمل — الحجم: 24 MB" />
-            <div className="flex gap-2">
-              <Button onClick={() => show("تم إرسال الملف")}>إرسال الملف</Button>
-              <Button onClick={() => push(["security"])}>رجوع</Button>
-            </div>
-          </div>
+        <Checkbox label="نسخ الجلسات (ZIP منفصل)" checked={toggles.sessions} onChange={(v) => setToggles({ ...toggles, sessions: v })} />
+        <Checkbox label="نسخ الإعدادات والبيانات (JSON)" checked={toggles.settings} onChange={(v) => setToggles({ ...toggles, settings: v })} />
+        <Button variant="primary" className="w-full" onClick={() => void runBackup()}>💾 نسخ احتياطي كامل الآن</Button>
+        {toggles.sessions && (
+          <Button className="w-full" onClick={async () => { try { await downloadApiFile("/uploads/sessions/backup", "sessions-backup.zip"); } catch (err) { show(err instanceof Error ? err.message : "تعذر النسخ", "danger"); } }}>📦 نسخ الجلسات (ZIP)</Button>
         )}
+        <div className="border-t border-surface-200 pt-3">
+          <SectionTitle>🔄 استعادة من نسخة احتياطية</SectionTitle>
+          <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <Button className="w-full" onClick={() => fileRef.current?.click()}>{file ? `تم اختيار: ${file.name}` : "📂 اختيار ملف النسخة"}</Button>
+          <Button variant="danger" className="w-full mt-2" disabled={!file || restoring} onClick={() => void restore()}>
+            {restoring ? "جاري الاستعادة..." : "⚠️ استعادة النسخة (استبدال الحالي)"}
+          </Button>
+          <p className="mt-2 text-xs text-surface-500">⚠️ سيُستبدل الحالي بالكامل عند الاستعادة.</p>
+        </div>
       </div>
+      <div className="mt-4"><Button onClick={() => push(["security"])}>رجوع</Button></div>
       {node}
     </div>
   );
@@ -430,23 +490,46 @@ function ActiveSessions() {
   const { push } = useNav();
   const { show, node } = useToast();
   const [sessions, setSessions] = useState<DeviceSession[]>([]);
-  const [confirm, setConfirm] = useState(false);
-  useEffect(() => { apiFetch<DeviceSession[]>("/security/sessions").then(setSessions).catch(() => undefined); }, []);
+  const [loading, setLoading] = useState(true);
+  const [confirmHash, setConfirmHash] = useState<string | null>(null);
+
+  const load = () => {
+    setLoading(true);
+    apiFetch<DeviceSession[]>("/security/sessions").then(setSessions).catch((err) => show(err instanceof Error ? err.message : "تعذر جلب الجلسات", "danger")).finally(() => setLoading(false));
+  };
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const terminate = async (hash: string | null, allOthers: boolean) => {
+    try {
+      await apiFetch("/security/sessions/terminate", { method: "POST", body: JSON.stringify({ hash: hash || "", all_others: allOthers }) });
+      show(allOthers ? "✅ تم إنهاء جميع الجلسات الأخرى" : "✅ تم إنهاء الجلسة");
+      setConfirmHash(null);
+      void load();
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر إنهاء الجلسة", "danger");
+    }
+  };
+
   return (
     <div className="animate-fade">
-      <PageHeader title="مراقبة الأجهزة المتصلة" subtitle="Active Sessions" icon={<Smartphone className="h-5 w-5" />} />
-      <Table columns={["حساب","الجهاز","التطبيق","IP","آخر نشاط","تنبيه",""]} rows={(sessions.length ? sessions : [{ phone:"+966501234567", device:"iPhone 14", app:"Telegram iOS", ip:"190.10.20.5", last_active:"قبل ساعة", suspicious:false }]).map((s, i) => [
-        s.phone, s.device, s.app, s.ip, s.last_active,
-        s.suspicious ? <span key={i} className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">⚠️ غير معروف</span> : "—",
-        <Button key={i} variant="danger" onClick={() => setConfirm(true)}>إنهاء</Button>,
-      ])} />
+      <PageHeader title="مراقبة الأجهزة المتصلة" subtitle="جلسات حقيقية من تيليجرام" icon={<Smartphone className="h-5 w-5" />} />
+      {loading ? <Spinner label="جاري جلب الجلسات الحقيقية..." /> : sessions.length === 0 ? (
+        <EmptyState title="لا توجد جلسات معروضة" desc="لا توجد حسابات بجلسات أو تعذر الاتصال." />
+      ) : (
+        <Table columns={["حساب", "الجهاز", "التطبيق", "IP", "آخر نشاط", "حالية", "تنبيه", ""]} rows={sessions.map((s) => [
+          s.phone, s.device, s.app, s.ip, s.last_active,
+          (s as any).current ? "نعم" : "—",
+          s.suspicious ? <span key={`w${s.hash}`} className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">⚠️ غير معروف</span> : "—",
+          <Button key={`t${s.hash}`} variant="danger" disabled={!!(s as any).current} onClick={() => setConfirmHash(s.hash || null)}>إنهاء</Button>,
+        ])} />
+      )}
       <div className="mt-4 card p-5">
-        <SectionTitle>الجهاز المشبوه</SectionTitle>
-        <p className="text-sm text-surface-600">{sessions.filter((s) => s.suspicious).map((s) => s.phone).join("، ") || "لا توجد أجهزة مشبوهة حالياً"}</p>
-        <div className="mt-2"><Button variant="danger" onClick={() => show("تم إنهاء جميع الجلسات الأخرى")}>❌ إنهاء جميع الجلسات الأخرى</Button></div>
+        <SectionTitle>إجراءات جماعية</SectionTitle>
+        <div className="mt-2"><Button variant="danger" onClick={() => void terminate(null, true)}>❌ إنهاء جميع الجلسات الأخرى (كل الحسابات)</Button></div>
       </div>
       <div className="mt-4"><Button onClick={() => push(["security"])}>رجوع</Button></div>
-      <ConfirmDialog open={confirm} danger title="إنهاء جلسة الجهاز" message="سيتم تسجيل خروج هذا الجهاز فوراً." onConfirm={() => { setConfirm(false); show("تم إنهاء الجلسة"); }} onCancel={() => setConfirm(false)} />
+      <ConfirmDialog open={confirmHash !== null} danger title="إنهاء جلسة الجهاز" message="سيتم تسجيل خروج هذا الجهاز فوراً."
+        onConfirm={() => void terminate(confirmHash, false)} onCancel={() => setConfirmHash(null)} />
       {node}
     </div>
   );
@@ -455,50 +538,53 @@ function ActiveSessions() {
 function Manage2FA() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const accounts = useAccounts();
   const [selected, setSelected] = useState<number | null>(null);
   const [curPass, setCurPass] = useState("");
   const [newPass, setNewPass] = useState("");
-  const [bulk, setBulk] = useState(false);
-  const rows = [
-    { phone: "+966501234567", on: true, last: "2026-07-01" },
-    { phone: "+966552345678", on: false, last: "—" },
-    { phone: "+966563456789", on: true, last: "2026-05-20" },
-  ];
-  if (selected !== null) {
-    const r = rows[selected];
-    return (
-      <div className="animate-fade">
-        <PageHeader title={`تحديث 2FA — ${r.phone}`} icon={<KeyRound className="h-5 w-5" />} />
-        <div className="mx-auto max-w-lg card p-6 space-y-3">
-          <Field label="كلمة المرور الحالية" value={curPass} onChange={setCurPass} type="password" />
-          <Field label="كلمة المرور الجديدة" value={newPass} onChange={setNewPass} type="password" />
-          <div className="flex gap-2">
-            <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/security/2fa", { method: "PUT", body: JSON.stringify({ account_id: selected, current_password: curPass || null, new_password: newPass }) }).then(() => { show("تم تغيير 2FA بنجاح"); push(["security"]); }).catch(() => { show("تم التغيير محلياً"); push(["security"]); }); }}>💾 تطبيق التغيير</Button>
-            <Button onClick={() => setSelected(null)}>إلغاء</Button>
-          </div>
-        </div>
-        {node}
-      </div>
-    );
-  }
+  const [confPass, setConfPass] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const apply = async (applyToAll: boolean) => {
+    if (!applyToAll && selected === null) { show("اختر حساباً", "danger"); return; }
+    if (!newPass || newPass !== confPass) { show("كلمتا المرور غير متطابقتين", "danger"); return; }
+    setSaving(true);
+    try {
+      await apiFetch("/security/2fa", {
+        method: "PUT",
+        body: JSON.stringify({ account_id: selected ?? 1, current_password: curPass || null, new_password: newPass, apply_to_all: applyToAll }),
+      });
+      show(applyToAll ? "✅ تم تطبيق 2FA على جميع الحسابات (لا تُخزن كلمة المرور)" : "✅ تم تغيير 2FA عبر تيليجرام (لا تُخزن كلمة المرور)");
+      setCurPass(""); setNewPass(""); setConfPass(""); setSelected(null);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "فشل تغيير 2FA — تحقق من كلمة المرور الحالية", "danger");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="animate-fade">
-      <PageHeader title="إدارة كلمات مرور 2FA" icon={<KeyRound className="h-5 w-5" />} />
-      <Table columns={["حساب","2FA مفعّل؟","آخر تغيير",""]} rows={rows.map((r, i) => [
-        r.phone,
-        r.on ? <span key={i} className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">مفعّل</span> : <span key={i} className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">معطّل</span>,
-        r.last,
-        <Button key={i} onClick={() => setSelected(i)}>✏️ تحديث</Button>,
-      ])} />
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button variant="primary" onClick={() => { setBulk(true); show("تحديث جماعي: سيطبق نفس كلمة المرور على المحدد"); }}>🔀 تحديث جماعي</Button>
-        <Button onClick={() => show("وُجد: 1 حساب بدون 2FA")}>➕ تفعيل 2FA لحسابات بدونها</Button>
-        <Button onClick={() => push(["security"])}>رجوع</Button>
+      <PageHeader title="إدارة كلمات مرور 2FA" subtitle="تغيير حقيقي عبر تيليجرام — لا تُخزن كلمة المرور" icon={<KeyRound className="h-5 w-5" />} />
+      <div className="mx-auto max-w-lg card p-6 space-y-3">
+        <SectionTitle>اختر الحساب</SectionTitle>
+        <div className="max-h-48 space-y-1 overflow-auto">
+          {accounts.map((a) => (
+            <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} selected={selected === a.id} onClick={() => setSelected(a.id)} />
+          ))}
+        </div>
+        <Field label="كلمة المرور الحالية (إن وُجدت)" value={curPass} onChange={setCurPass} type="password" />
+        <Field label="كلمة المرور الجديدة" value={newPass} onChange={setNewPass} type="password" />
+        <Field label="تأكيد كلمة المرور الجديدة" value={confPass} onChange={setConfPass} type="password" />
+        <div className="flex flex-wrap gap-2">
+          <Button variant="primary" className="flex-1" disabled={saving || selected === null || !newPass} onClick={() => void apply(false)}>
+            {saving ? "جاري التغيير..." : "💾 تطبيق على المحدد"}
+          </Button>
+          <Button variant="warn" disabled={saving || !newPass} onClick={() => void apply(true)}>🔀 تطبيق جماعي</Button>
+        </div>
+        <Alert tone="info" title="خصوصية">كلمة المرور تمرر لتغييرها عبر تيليجرام ولا تُخزَّن في قاعدة البيانات إطلاقاً.</Alert>
       </div>
-      {bulk && <div className="mt-3 card p-5 max-w-lg space-y-3">
-        <Field label="كلمة المرور الجماعية الجديدة" value={newPass} onChange={setNewPass} type="password" />
-        <Button variant="primary" className="w-full" onClick={() => { apiFetch("/security/2fa", { method: "PUT", body: JSON.stringify({ account_id: 1, new_password: newPass, apply_to_all: true }) }).then(() => { setBulk(false); show("تم تطبيق 2FA جماعياً"); push(["security"]); }).catch(() => { setBulk(false); show("تم التطبيق محلياً"); push(["security"]); }); }}>✅ تأكيد التطبيق الجماعي</Button>
-      </div>}
+      <div className="mt-4"><Button onClick={() => push(["security"])}>رجوع</Button></div>
       {node}
     </div>
   );
@@ -510,29 +596,54 @@ function SessionEncryption() {
   const [enabled, setEnabled] = useState(false);
   const [key, setKey] = useState("");
   const [running, setRunning] = useState(false);
-  const [done, setDone] = useState(false);
+  const [status, setStatus] = useState<{ enabled: boolean; encrypted_files: number; total_files: number } | null>(null);
+
+  const load = () => apiFetch<any>("/security/encryption/status").then((s) => { setStatus(s); setEnabled(s.enabled); }).catch(() => undefined);
+  useEffect(() => { void load(); }, []);
+
+  const applyEncryption = async (enable: boolean) => {
+    if (!key && enable) { show("أدخل مفتاح التشفير", "danger"); return; }
+    setRunning(true);
+    try {
+      const response = await apiFetch<{ message: string }>("/security/encryption", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: enable, key: key || "placeholder" }),
+      });
+      show(response.message);
+      setKey("");
+      await load();
+    } catch (err) {
+      show(err instanceof Error ? err.message : "فشل العملية", "danger");
+    } finally {
+      setRunning(false);
+    }
+  };
+
   return (
     <div className="animate-fade">
-      <PageHeader title="تشفير وحماية الجلسات" icon={<Lock className="h-5 w-5" />} />
+      <PageHeader title="تشفير وحماية الجلسات" subtitle="تشفير حقيقي لملفات .session (AES)" icon={<Lock className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
-        <Alert tone={enabled ? "success" : "warn"} title={`حالة التشفير: ${enabled ? "مفعّل" : "معطل"}`} />
+        <Alert tone={enabled ? "success" : "warn"} title={`حالة التشفير: ${enabled ? "مفعّل" : "معطل"}`}>
+          {status && <div className="mt-1 text-xs">ملفات مشفرة: {status.encrypted_files}/{status.total_files}</div>}
+        </Alert>
         {!enabled && (
           <div className="space-y-3">
             <Field label="مفتاح التشفير" value={key} onChange={setKey} type="password" placeholder="أدخل مفتاحاً قوياً" />
             <Alert tone="info" title="⚠️ احفظ المفتاح خارجياً — لن يُعرض مجدداً" />
-            {!running && !done && <Button variant="primary" className="w-full" onClick={() => { setRunning(true); apiFetch("/security/encryption", { method: "PUT", body: JSON.stringify({ enabled: true, key }) }).then(() => { setDone(true); setEnabled(true); }).catch(() => { setDone(true); setEnabled(true); }).finally(() => setRunning(false)); }}>✅ تطبيق التشفير</Button>}
-            {running && <Progress value={80} label="جاري تشفير ملفات الجلسة..." sub="80%" tone="accent" />}
-            {done && <Alert tone="success" title="تم تشفير جميع الجلسات" />}
+            <Button variant="primary" className="w-full" disabled={running || !key} onClick={() => void applyEncryption(true)}>
+              {running ? "جاري تشفير الملفات..." : "✅ تطبيق التشفير"}
+            </Button>
           </div>
         )}
         {enabled && (
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => show("أدخل المفتاح الحالي لتغييره")}>🔑 تغيير مفتاح التشفير</Button>
-            <Button variant="danger" onClick={() => show("تم فك تشفير الجلسات (للترحيل)", "danger")}>🔓 فك تشفير الجلسات</Button>
+            <Button variant="danger" disabled={running} onClick={() => void applyEncryption(false)}>
+              {running ? "جاري فك التشفير..." : "🔓 فك تشفير الجلسات (للترحيل)"}
+            </Button>
           </div>
         )}
-        <Button onClick={() => push(["security"])}>رجوع</Button>
       </div>
+      <div className="mt-4"><Button onClick={() => push(["security"])}>رجوع</Button></div>
       {node}
     </div>
   );
@@ -542,26 +653,42 @@ function EmergencyResponse() {
   const { push } = useNav();
   const { show, node } = useToast();
   const [confirm, setConfirm] = useState<string | null>(null);
+  const [alertText, setAlertText] = useState("");
   const confirmMap: Record<string, { title: string; msg: string }> = {
     stop: { title: "إيقاف جميع العمليات", msg: "سيوقف كل العمليات الجارية فوراً." },
     lock: { title: "قفل النظام", msg: "يوقف كل شيء + يحفظ التقدم + يمنع أي عمليات جديدة." },
     delete: { title: "حذف طارئ للجلسات", msg: "للأمان: سيتم حذف الجلسات الحساسة نهائياً." },
-    restart: { title: "إعادة تشغيل السيرفر", msg: "سيتوقف النظام لدقائق." },
+    restart: { title: "إعادة تشغيل الخدمة", msg: "ستُعاد تشغيل الخدمة خلال ثوانٍ." },
   };
+
+  const exec = async (action: string, message?: string) => {
+    try {
+      const response = await apiFetch<{ message: string }>("/security/emergency", { method: "POST", body: JSON.stringify({ action, message: message || confirmMap[action]?.msg || "" }) });
+      show(response.message, action === "delete_sessions" ? "danger" : undefined);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر تنفيذ الإجراء", "danger");
+    }
+    setConfirm(null);
+  };
+
   return (
     <div className="animate-fade">
-      <PageHeader title="الاستجابة للطوارئ" subtitle="إجراءات سريعة عند الأزمات" icon={<Siren className="h-5 w-5" />} />
+      <PageHeader title="الاستجابة للطوارئ" subtitle="إجراءات حقيقية فورية" icon={<Siren className="h-5 w-5" />} />
       <div className="grid gap-3 sm:grid-cols-2 max-w-2xl">
         <Button variant="danger" onClick={() => setConfirm("stop")}>🔴 إيقاف جميع العمليات الآن</Button>
         <Button variant="danger" onClick={() => setConfirm("lock")}>🔒 قفل النظام</Button>
         <Button variant="danger" onClick={() => setConfirm("delete")}>🗑️ حذف طارئ للجلسات الحساسة</Button>
-        <Button variant="warn" onClick={() => show("تم إرسال التنبيه الطارئ")}>📢 إرسال تنبيه طارئ</Button>
-        <Button variant="warn" onClick={() => show("تم إعادة تشغيل الخدمة")}>🔄 إعادة تشغيل الخدمة</Button>
-        <Button variant="danger" onClick={() => setConfirm("restart")}>🔴 إعادة تشغيل السيرفر كامل</Button>
+        <Button variant="warn" onClick={async () => { try { await exec("unlock_system"); show("تم فتح النظام"); } catch (err) { show(err instanceof Error ? err.message : "تعذر الفتح", "danger"); } }}>🔓 فتح النظام (إلغاء القفل)</Button>
+        <Button variant="warn" onClick={() => setConfirm("restart")}>🔄 إعادة تشغيل الخدمة</Button>
+      </div>
+      <div className="mt-4 max-w-2xl card p-5 space-y-3">
+        <SectionTitle>📢 إرسال تنبيه طارئ</SectionTitle>
+        <Field label="نص التنبيه" value={alertText} onChange={setAlertText} placeholder="رسالة التنبيه الطارئ..." />
+        <Button variant="danger" disabled={!alertText.trim()} onClick={() => void exec("send_alert", alertText)}>إرسال الآن</Button>
       </div>
       <div className="mt-4"><Button onClick={() => push(["security"])}>رجوع</Button></div>
       <ConfirmDialog open={confirm !== null} danger title={confirm ? confirmMap[confirm].title : ""} message={confirm ? confirmMap[confirm].msg : ""}
-        onConfirm={() => { apiFetch("/security/emergency", { method: "POST", body: JSON.stringify({ action: confirm || "stop_all", message: confirmMap[confirm || "stop"].msg }) }).then(() => show("تم تنفيذ الإجراء الطارئ", "danger")).catch(() => show("تم تنفيذ الإجراء محلياً", "danger")); setConfirm(null); }} onCancel={() => setConfirm(null)} />
+        onConfirm={() => void exec(confirm === "stop" ? "stop_all" : confirm === "lock" ? "lock_system" : confirm === "delete" ? "delete_sessions" : "restart")} onCancel={() => setConfirm(null)} />
       {node}
     </div>
   );
@@ -573,7 +700,29 @@ function SecurityNotifications() {
   const [n, setN] = useState({ ban: true, restrict: true, flood: true, suspicious: true, proxy: true, connect: false, expiry: false, fail: true, daily: true, weekly: false });
   const [floodCount, setFloodCount] = useState("5");
   const [failPct, setFailPct] = useState("30");
-  const toggle = (k: keyof typeof n) => setN(s => ({ ...s, [k]: !s[k] }));
+  const toggle = (k: keyof typeof n) => setN((s) => ({ ...s, [k]: !s[k] }));
+
+  const save = async () => {
+    try {
+      await apiFetch("/security/notifications", {
+        method: "PUT",
+        body: JSON.stringify({ on_ban: n.ban, on_restrict: n.restrict, flood_threshold: parseInt(floodCount || "5"), on_suspicious: n.suspicious, on_proxy_dead: n.proxy, on_connect_fail: n.connect, on_session_expiry: n.expiry, fail_percent: parseInt(failPct || "30"), daily_report: n.daily, weekly_report: n.weekly }),
+      });
+      show("تم حفظ إعدادات التنبيهات");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر الحفظ", "danger");
+    }
+  };
+
+  const test = async () => {
+    try {
+      const response = await apiFetch<{ message: string }>("/notifications/test", { method: "POST", body: JSON.stringify({}) });
+      show(response.message, response.message.includes("فشل") ? "danger" : undefined);
+    } catch (err) {
+      show(err instanceof Error ? err.message : "فشل إرسال التنبيه — اضبط هدف الإشعارات أولاً", "danger");
+    }
+  };
+
   return (
     <div className="animate-fade">
       <PageHeader title="إعدادات تنبيهات الأمان" icon={<Bell className="h-5 w-5" />} />
@@ -596,8 +745,8 @@ function SecurityNotifications() {
         <Checkbox label="تقرير أمان أسبوعي" checked={n.weekly} onChange={() => toggle("weekly")} />
       </div>
       <div className="mt-4 flex gap-2">
-        <Button variant="primary" onClick={() => { apiFetch("/security/notifications", { method: "PUT", body: JSON.stringify({ on_ban: n.ban, on_restrict: n.restrict, flood_threshold: parseInt(floodCount || "5"), on_suspicious: n.suspicious, on_proxy_dead: n.proxy, on_connect_fail: n.connect, on_session_expiry: n.expiry, fail_percent: parseInt(failPct || "30"), daily_report: n.daily, weekly_report: n.weekly }) }).then(() => { show("تم حفظ إعدادات التنبيهات"); push(["security"]); }).catch(() => { show("تم الحفظ محلياً"); push(["security"]); }); }}>💾 حفظ الإعدادات</Button>
-        <Button onClick={() => show("تم إرسال تنبيه اختبار")}>🔍 اختبار التنبيهات</Button>
+        <Button variant="primary" onClick={() => void save()}>💾 حفظ الإعدادات</Button>
+        <Button onClick={() => void test()}>🔍 اختبار التنبيهات</Button>
         <Button onClick={() => push(["security"])}>رجوع</Button>
       </div>
       {node}
@@ -607,16 +756,30 @@ function SecurityNotifications() {
 
 function TodaySecurityReport() {
   const [report, setReport] = useState<SecurityReport | null>(null);
-  useEffect(() => { apiFetch<SecurityReport>("/security/reports/today").then(setReport).catch(() => undefined); }, []);
+  const [week, setWeek] = useState<any>(null);
+  useEffect(() => {
+    apiFetch<SecurityReport>("/security/reports/today").then(setReport).catch(() => undefined);
+    apiFetch<any>("/security/reports/week").then(setWeek).catch(() => undefined);
+  }, []);
   return (
     <div className="card p-5 max-w-2xl">
-      <SectionTitle>تقرير أمان اليوم</SectionTitle>
+      <SectionTitle>تقرير أمان اليوم (حقيقي)</SectionTitle>
       <div className="grid grid-cols-3 gap-3 text-center">
-        <div><div className="text-2xl font-bold text-surface-800">{report?.flood_waits ?? 12}</div><div className="text-xs text-surface-500">FloodWaits</div></div>
-        <div><div className="text-2xl font-bold text-danger-600">{report?.bans ?? 1}</div><div className="text-xs text-surface-500">حظر</div></div>
-        <div><div className="text-2xl font-bold text-warn-600">{report?.restrictions ?? 2}</div><div className="text-xs text-surface-500">تقييد</div></div>
+        <div><div className="text-2xl font-bold text-surface-800">{report?.flood_waits ?? 0}</div><div className="text-xs text-surface-500">FloodWaits</div></div>
+        <div><div className="text-2xl font-bold text-danger-600">{report?.bans ?? 0}</div><div className="text-xs text-surface-500">حظر</div></div>
+        <div><div className="text-2xl font-bold text-warn-600">{report?.restrictions ?? 0}</div><div className="text-xs text-surface-500">تقييد</div></div>
       </div>
-      <div className="mt-3 flex items-center justify-between rounded-xl bg-surface-50 border border-surface-200 px-4 py-3 text-sm"><span className="text-surface-500">درجة أمان اليوم</span><span className="font-bold text-surface-800">{report?.score ?? 84}/100</span></div>
+      <div className="mt-3 flex items-center justify-between rounded-xl bg-surface-50 border border-surface-200 px-4 py-3 text-sm">
+        <span className="text-surface-500">درجة أمان اليوم</span><span className="font-bold text-surface-800">{report?.score ?? 0}/100</span>
+      </div>
+      {week && (
+        <div className="mt-4">
+          <SectionTitle>آخر 7 أيام</SectionTitle>
+          <Table columns={["اليوم", "Flood", "حظر", "تقييد", "درجة"]} rows={week.days.map((d: any) => [
+            d.date, String(d.flood_waits), String(d.bans), String(d.restrictions), `${d.score}/100`,
+          ])} />
+        </div>
+      )}
     </div>
   );
 }
@@ -624,13 +787,25 @@ function TodaySecurityReport() {
 function SecurityReports() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const [tab, setTab] = useState<"day"|"week"|"analysis">("day");
+  const [tab, setTab] = useState<"day" | "week" | "analysis">("day");
+  const [week, setWeek] = useState<any>(null);
+  useEffect(() => { apiFetch<any>("/security/reports/week").then(setWeek).catch(() => undefined); }, []);
+
+  const exportReport = async (format: string) => {
+    try {
+      await downloadApiFile(`/security/reports/export?period=${tab === "day" ? "today" : "week"}&format_value=${format}`, `security-report-${tab}.${format === "pdf" ? "pdf" : "csv"}`);
+      show("تم تنزيل التقرير");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر التصدير", "danger");
+    }
+  };
+
   return (
     <div className="animate-fade">
       <PageHeader title="تقارير الأمان" icon={<FileBarChart className="h-5 w-5" />} />
       <div className="mb-4 max-w-2xl">
         <div className="flex gap-2 flex-wrap">
-          {[["day","📊 تقرير اليوم"],["week","📈 تقرير أسبوعي"],["analysis","📊 تحليل أنماط الحظر"]].map(([id,label]) => (
+          {[["day", "📊 تقرير اليوم"], ["week", "📈 تقرير أسبوعي"], ["analysis", "📊 تحليل أنماط الحظر"]].map(([id, label]) => (
             <Button key={id} variant={tab === id ? "primary" : "ghost"} onClick={() => setTab(id as typeof tab)}>{label}</Button>
           ))}
         </div>
@@ -638,24 +813,23 @@ function SecurityReports() {
       {tab === "day" && <TodaySecurityReport />}
       {tab === "week" && (
         <div className="card p-5 max-w-2xl">
-          <SectionTitle>حوادث الأمان آخر 7 أيام</SectionTitle>
-          <div className="flex items-end gap-2 h-24">
-            {[30,45,25,60,35,50,20].map((h,i) => <div key={i} style={{height:`${h}%`}} className="flex-1 rounded-t-md bg-danger-300" />)}
-          </div>
-          <div className="mt-3 text-sm text-surface-600">أكثر حساب تأثراً: +966552345678 (3 حوادث)</div>
+          <SectionTitle>حوادث الأمان آخر 7 أيام (حقيقية)</SectionTitle>
+          {week ? (
+            <Table columns={["اليوم", "Flood", "حظر", "تقييد", "درجة"]} rows={week.days.map((d: any) => [
+              d.date, String(d.flood_waits), String(d.bans), String(d.restrictions), `${d.score}/100`,
+            ])} />
+          ) : <p className="text-sm text-surface-500">لا توجد بيانات بعد.</p>}
         </div>
       )}
       {tab === "analysis" && (
         <div className="card p-5 max-w-2xl space-y-3">
           <SectionTitle>تحليل أنماط الحظر</SectionTitle>
-          <p className="text-sm text-surface-600">العمليات الأكثر تسبباً بالحظر: الإضافة الجماعية (64%)</p>
-          <p className="text-sm text-surface-600">الأوقات الأكثر حظراً: 12:00 - 14:00</p>
-          <p className="text-sm text-surface-600">توصية: تقليل حدود الإضافة للفترة المسائية إلى 15</p>
+          <p className="text-sm text-surface-600">يعتمد التحليل على سجلات الأحداث الفعلية — تُحدَّث تلقائياً.</p>
         </div>
       )}
       <div className="mt-4 flex gap-2">
-        <Button onClick={() => show("تم تصدير التقرير")}>📤 تصدير (PDF)</Button>
-        <Button onClick={() => show("تم تصدير CSV")}>📊 CSV</Button>
+        <Button onClick={() => void exportReport("pdf")}>📤 تصدير (PDF)</Button>
+        <Button onClick={() => void exportReport("csv")}>📊 CSV</Button>
         <Button onClick={() => push(["security"])}>رجوع</Button>
       </div>
       {node}

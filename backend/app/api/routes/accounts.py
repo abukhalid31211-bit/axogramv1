@@ -1,16 +1,199 @@
+from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import DbSession, get_current_active_user
-from app.db.models import Account, User
-from app.schemas.account import AccountCreate, AccountPublic, AccountUpdate
+from app.db.models import Account, AccountPool, User
+from app.schemas.account import (
+    AccountCreate,
+    AccountPoolCreate,
+    AccountPoolDetail,
+    AccountPoolPublic,
+    AccountPoolUpdate,
+    AccountPublic,
+    AccountUpdate,
+    BulkProfilePayload,
+    ProfileUpdatePayload,
+    SessionImportFilesPayload,
+    SessionImportStringPayload,
+    SessionImportTextPayload,
+)
 from app.schemas.common import MessageResponse
+from app.schemas.jobs import JobStartResponse
+from app.services import jobrunner
 from app.services.audit import write_audit_log
+from app.services.rotation import get_usage_snapshot, reset_usage
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
+
+# ==========================================================================
+# Static paths (must precede /{account_id})
+# ==========================================================================
+
+# ------------------------- Pools -------------------------
+
+@router.get("/pools", response_model=list[AccountPoolPublic])
+def list_pools(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> list[AccountPoolPublic]:
+    rows = db.query(AccountPool).order_by(AccountPool.name.asc()).all()
+    return [AccountPoolPublic.model_validate(row) for row in rows]
+
+
+@router.post("/pools", response_model=AccountPoolPublic, status_code=status.HTTP_201_CREATED)
+def create_pool(payload: AccountPoolCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPoolPublic:
+    if db.query(AccountPool).filter(AccountPool.name == payload.name).first():
+        raise HTTPException(status_code=409, detail="اسم المجموعة موجود مسبقاً")
+    row = AccountPool(**payload.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    write_audit_log(db, action="accounts.pools.create", message=f"إنشاء مجموعة حسابات {row.name}", actor_user_id=current_user.id, entity_type="account_pool", entity_id=str(row.id))
+    return AccountPoolPublic.model_validate(row)
+
+
+@router.get("/pools/{pool_id}", response_model=AccountPoolDetail)
+def get_pool(pool_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPoolDetail:
+    row = db.query(AccountPool).filter(AccountPool.id == pool_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="المجموعة غير موجودة")
+    accounts = db.query(Account).filter(Account.pool_id == pool_id).order_by(Account.id.asc()).all()
+    return AccountPoolDetail(id=row.id, name=row.name, description=row.description, purpose=row.purpose, created_at=row.created_at, updated_at=row.updated_at, accounts=[AccountPublic.model_validate(a) for a in accounts])
+
+
+@router.put("/pools/{pool_id}", response_model=AccountPoolPublic)
+def update_pool(pool_id: int, payload: AccountPoolUpdate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPoolPublic:
+    row = db.query(AccountPool).filter(AccountPool.id == pool_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="المجموعة غير موجودة")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(row, key, value)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    write_audit_log(db, action="accounts.pools.update", message=f"تعديل مجموعة {row.name}", actor_user_id=current_user.id, entity_type="account_pool", entity_id=str(row.id))
+    return AccountPoolPublic.model_validate(row)
+
+
+@router.delete("/pools/{pool_id}", response_model=MessageResponse)
+def delete_pool(pool_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
+    row = db.query(AccountPool).filter(AccountPool.id == pool_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="المجموعة غير موجودة")
+    db.query(Account).filter(Account.pool_id == pool_id).update({Account.pool_id: None})
+    db.delete(row)
+    db.commit()
+    write_audit_log(db, action="accounts.pools.delete", message=f"حذف مجموعة حسابات", actor_user_id=current_user.id, entity_type="account_pool", entity_id=str(pool_id), level="warn")
+    return MessageResponse(message="تم حذف المجموعة")
+
+
+# ------------------------- Session import -------------------------
+
+@router.post("/import/sessions", response_model=JobStartResponse)
+async def import_session_files(
+    db: DbSession,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    files: list[UploadFile] = File(...),
+) -> JobStartResponse:
+    """Import uploaded .session files (validate each via Telethon)."""
+    from app.core.config import get_settings as _gs
+
+    settings = _gs()
+    sessions_dir = settings.storage_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[str] = []
+    for file in files:
+        if not (file.filename or "").endswith(".session"):
+            continue
+        target = sessions_dir / file.filename
+        target.write_bytes(await file.read())
+        paths.append(str(target))
+    if not paths:
+        raise HTTPException(status_code=400, detail="لم يتم رفع أي ملفات .session صالحة")
+    job_id = jobrunner.start_job(
+        kind="sessions_import",
+        label=f"استيراد {len(paths)} ملف جلسة",
+        entity_type="account",
+        entity_id="import",
+        actor_user_id=current_user.id,
+        payload={"method": "files", "paths": paths, "actor_user_id": current_user.id},
+    )
+    return JobStartResponse(mode="queued", message="تم بدء فحص الجلسات واستيراد الصالحة منها", job_id=job_id)
+
+
+@router.post("/import/zip", response_model=JobStartResponse)
+async def import_session_zip(
+    db: DbSession,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    file: UploadFile = File(...),
+    password: str | None = None,
+) -> JobStartResponse:
+    from app.core.config import get_settings as _gs
+
+    settings = _gs()
+    sessions_dir = settings.storage_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    target = sessions_dir / f"import_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{(file.filename or 'archive.zip')}"
+    target.write_bytes(await file.read())
+    job_id = jobrunner.start_job(
+        kind="sessions_import",
+        label=f"استيراد جلسات من {file.filename or 'ZIP'}",
+        entity_type="account",
+        entity_id="import",
+        actor_user_id=current_user.id,
+        payload={"method": "zip", "zip_path": str(target), "password": password, "actor_user_id": current_user.id},
+    )
+    return JobStartResponse(mode="queued", message="تم بدء فك الضغط وفحص الجلسات", job_id=job_id)
+
+
+@router.post("/import/string", response_model=JobStartResponse)
+def import_string_sessions(payload: SessionImportStringPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
+    sessions = [s.strip() for s in payload.sessions if s.strip()]
+    if not sessions:
+        raise HTTPException(status_code=400, detail="أدخل Session واحداً على الأقل")
+    job_id = jobrunner.start_job(
+        kind="sessions_import",
+        label=f"استيراد {len(sessions)} String Session",
+        entity_type="account",
+        entity_id="import",
+        actor_user_id=current_user.id,
+        payload={"method": "string", "sessions": sessions, "actor_user_id": current_user.id},
+    )
+    return JobStartResponse(mode="queued", message="تم بدء فحص وتحويل الجلسات", job_id=job_id)
+
+
+@router.post("/import/text", response_model=JobStartResponse)
+def import_text_sessions(payload: SessionImportTextPayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
+    if not payload.content.strip():
+        raise HTTPException(status_code=400, detail="الملف النصي فارغ")
+    job_id = jobrunner.start_job(
+        kind="sessions_import",
+        label="استيراد جلسات من ملف نصي",
+        entity_type="account",
+        entity_id="import",
+        actor_user_id=current_user.id,
+        payload={"method": "text", "content": payload.content, "actor_user_id": current_user.id},
+    )
+    return JobStartResponse(mode="queued", message="تم بدء تحليل الملف النصي", job_id=job_id)
+
+
+# ------------------------- Usage -------------------------
+
+@router.get("/usage")
+def account_usage(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], date: str | None = None) -> dict:
+    return {"date": date or datetime.now(timezone.utc).strftime("%Y-%m-%d"), "rows": get_usage_snapshot(db, date)}
+
+
+@router.post("/usage/reset", response_model=MessageResponse)
+def reset_account_usage(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], date: str | None = None) -> MessageResponse:
+    deleted = reset_usage(db, date)
+    return MessageResponse(message=f"تم تصفير الاستخدام ({deleted} سجل)")
+
+
+# ==========================================================================
+# Parametrized routes
+# ==========================================================================
 
 @router.get("", response_model=list[AccountPublic])
 def list_accounts(
@@ -18,30 +201,55 @@ def list_accounts(
     current_user: Annotated[User, Depends(get_current_active_user)],
     search: str | None = Query(default=None),
     status_value: str | None = Query(default=None, alias="status"),
+    pool_id: int | None = Query(default=None),
 ) -> list[AccountPublic]:
     query = db.query(Account)
     if search:
         query = query.filter(Account.name.ilike(f"%{search}%") | Account.phone.ilike(f"%{search}%") | Account.username.ilike(f"%{search}%"))
     if status_value:
         query = query.filter(Account.status == status_value)
+    if pool_id:
+        query = query.filter(Account.pool_id == pool_id)
     rows = query.order_by(Account.id.asc()).all()
     return [AccountPublic.model_validate(row) for row in rows]
 
 
 @router.post("", response_model=AccountPublic, status_code=status.HTTP_201_CREATED)
-def create_account(
-    payload: AccountCreate,
-    db: DbSession,
-    current_user: Annotated[User, Depends(get_current_active_user)],
-) -> AccountPublic:
+def create_account(payload: AccountCreate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPublic:
     if db.query(Account).filter(Account.phone == payload.phone).first():
         raise HTTPException(status_code=409, detail="رقم الهاتف موجود مسبقاً")
     row = Account(**payload.model_dump())
     db.add(row)
     db.commit()
     db.refresh(row)
-    write_audit_log(db, action="accounts.create", message=f"Created account {row.phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(row.id))
+    write_audit_log(db, action="accounts.create", message=f"إنشاء حساب {row.phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(row.id))
     return AccountPublic.model_validate(row)
+
+
+@router.post("/{account_id}/pool/{pool_id}", response_model=AccountPublic)
+def assign_to_pool(account_id: int, pool_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPublic:
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    if not db.query(AccountPool).filter(AccountPool.id == pool_id).first():
+        raise HTTPException(status_code=404, detail="المجموعة غير موجودة")
+    account.pool_id = pool_id
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+    return AccountPublic.model_validate(account)
+
+
+@router.delete("/{account_id}/pool", response_model=AccountPublic)
+def unassign_from_pool(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPublic:
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    account.pool_id = None
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+    return AccountPublic.model_validate(account)
 
 
 @router.get("/{account_id}", response_model=AccountPublic)
@@ -53,12 +261,7 @@ def get_account(account_id: int, db: DbSession, current_user: Annotated[User, De
 
 
 @router.put("/{account_id}", response_model=AccountPublic)
-def update_account(
-    account_id: int,
-    payload: AccountUpdate,
-    db: DbSession,
-    current_user: Annotated[User, Depends(get_current_active_user)],
-) -> AccountPublic:
+def update_account(account_id: int, payload: AccountUpdate, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> AccountPublic:
     row = db.query(Account).filter(Account.id == account_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="الحساب غير موجود")
@@ -67,7 +270,7 @@ def update_account(
     db.add(row)
     db.commit()
     db.refresh(row)
-    write_audit_log(db, action="accounts.update", message=f"Updated account {row.phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(row.id))
+    write_audit_log(db, action="accounts.update", message=f"تحديث حساب {row.phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(row.id))
     return AccountPublic.model_validate(row)
 
 
@@ -79,5 +282,103 @@ def delete_account(account_id: int, db: DbSession, current_user: Annotated[User,
     phone = row.phone
     db.delete(row)
     db.commit()
-    write_audit_log(db, action="accounts.delete", message=f"Deleted account {phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(account_id), level="warn")
+    write_audit_log(db, action="accounts.delete", message=f"حذف حساب {phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(account_id), level="warn")
     return MessageResponse(message="تم حذف الحساب")
+
+
+# ------------------------- Telegram sessions (real devices) -------------------------
+
+@router.get("/{account_id}/telegram-sessions")
+def account_telegram_sessions(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> list[dict]:
+    from app.services.security import get_account_sessions
+
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    try:
+        return get_account_sessions(db, account)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"تعذر جلب الجلسات: {exc}") from exc
+
+
+@router.post("/{account_id}/telegram-sessions/terminate", response_model=MessageResponse)
+def terminate_telegram_session(account_id: int, payload: dict, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
+    from app.services.security import terminate_account_session
+
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    try:
+        terminated = terminate_account_session(db, account, hash_value=payload.get("hash"), all_others=bool(payload.get("all_others")))
+        write_audit_log(db, action="accounts.sessions.terminate", message=f"إنهاء جلسات ({terminated}) لحساب {account.phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(account_id), level="warn")
+        return MessageResponse(message=f"تم إنهاء {terminated} جلسة")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"تعذر إنهاء الجلسات: {exc}") from exc
+
+
+# ------------------------- Profile management -------------------------
+
+@router.put("/{account_id}/profile", response_model=MessageResponse)
+def update_account_profile(account_id: int, payload: ProfileUpdatePayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> MessageResponse:
+    from app.services.security import update_account_profile
+
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    try:
+        update_account_profile(
+            db,
+            account,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+            bio=payload.bio,
+            username=payload.username,
+        )
+        if payload.username:
+            account.username = f"@{payload.username.lstrip('@')}"
+        db.add(account)
+        db.commit()
+        write_audit_log(db, action="accounts.profile.update", message=f"تحديث ملف حساب {account.phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(account_id))
+        return MessageResponse(message="تم تحديث الملف الشخصي")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"تعذر التحديث: {exc}") from exc
+
+
+@router.post("/{account_id}/profile/photo", response_model=MessageResponse)
+async def update_account_photo(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)], file: UploadFile = File(...)) -> MessageResponse:
+    from app.services.security import update_account_photo
+
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    from app.core.config import get_settings as _gs
+
+    target = _gs().storage_path / "uploads" / f"photo_{account_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{file.filename or 'photo.jpg'}"
+    target.write_bytes(await file.read())
+    try:
+        update_account_photo(db, account, str(target))
+        write_audit_log(db, action="accounts.profile.photo", message=f"تغيير صورة حساب {account.phone}", actor_user_id=current_user.id, entity_type="account", entity_id=str(account_id))
+        return MessageResponse(message="تم تغيير الصورة الشخصية")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"تعذر تغيير الصورة: {exc}") from exc
+
+
+@router.post("/profile/bulk", response_model=JobStartResponse)
+def bulk_profile_update(payload: BulkProfilePayload, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> JobStartResponse:
+    job_id = jobrunner.start_job(
+        kind="account_profile_bulk",
+        label="تحديث ملفات شخصية جماعي",
+        entity_type="account",
+        entity_id="bulk",
+        actor_user_id=current_user.id,
+        payload={**payload.model_dump(), "actor_user_id": current_user.id},
+    )
+    return JobStartResponse(mode="queued", message="تم بدء التحديث الجماعي للملفات الشخصية", job_id=job_id)

@@ -399,11 +399,13 @@ export type SecurityAuditResult = {
 export type DeviceSession = {
   account_id?: number | null;
   phone: string;
+  hash?: string | null;
   device: string;
   app: string;
   ip: string;
   last_active: string;
   suspicious: boolean;
+  current?: boolean;
 };
 export type SecurityEventRecord = {
   id: number;
@@ -460,4 +462,199 @@ export type LeaderboardRow = {
   phone: string;
   value: number;
   metric: string;
+};
+
+// ---------- Job runs (unified) ----------
+export type JobRun = {
+  id: string;
+  kind: string;
+  label: string;
+  status: "queued" | "running" | "paused" | "cancelled" | "done" | "failed";
+  control: string;
+  progress: number;
+  current_step?: string | null;
+  progress_json?: string | null;
+  result_json?: string | null;
+  error?: string | null;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  created_by?: number | null;
+  created_at: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  updated_at: string;
+};
+
+export type JobRunStatus = {
+  job_id: string;
+  status: string;
+  progress: number;
+  current_step?: string | null;
+  kind?: string;
+  label?: string;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  enqueued_at?: string | null;
+  ended_at?: string | null;
+};
+
+// ---------- Account pools ----------
+export type AccountPool = {
+  id: number;
+  name: string;
+  description?: string | null;
+  purpose: string;
+  created_at: string;
+  updated_at: string;
+  accounts?: AccountRecord[];
+};
+
+// ---------- Groups ----------
+export type GroupRecord = {
+  id: number;
+  name: string;
+  group_type: string;
+  members_count: number;
+  category_id?: number | null;
+  category_name?: string | null;
+  account_id?: number | null;
+  account_phone?: string | null;
+  status: string;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GroupCategory = {
+  id: number;
+  name: string;
+  description?: string | null;
+  groups_count: number;
+  created_at: string;
+};
+
+export type GroupBlacklistEntry = {
+  id: number;
+  group_value: string;
+  reason?: string | null;
+  created_by?: number | null;
+  created_at: string;
+};
+
+export type GroupStats = {
+  total_groups: number;
+  total_members: number;
+  by_type: Record<string, number>;
+  by_status: Record<string, number>;
+  by_category: Record<string, number>;
+  largest: Array<{ name: string; members: number }>;
+  joined_today: number;
+};
+
+// ---------- Notification events ----------
+export type NotificationEvent = {
+  id: number;
+  event_type: string;
+  level: string;
+  title: string;
+  message: string;
+  details_json?: string | null;
+  delivery_status: string;
+  delivery_error?: string | null;
+  created_at: string;
+  sent_at?: string | null;
+};
+
+// ---------- Reports ----------
+export type TodayReport = {
+  date: string;
+  gathered_today: number;
+  added_today: number;
+  add_failed_today: number;
+  dm_today: number;
+  group_today: number;
+  flood_today: number;
+  accounts_total: number;
+  accounts_active: number;
+  proxies_total: number;
+  proxies_active: number;
+  campaigns_active: number;
+  campaigns_sent_today: number;
+  total_operations_today: number;
+  compare_yesterday_pct?: number | null;
+  best_account?: { account_id: number; phone: string; operations: number } | null;
+  bans_today: number;
+};
+
+export type WeekReport = {
+  days: Array<{ date: string; gathered: number; added: number; dm: number; group: number; flood: number }>;
+  totals: { gathered: number; added: number; dm: number; group: number; flood: number };
+  best_day: string;
+};
+
+export type RotationLive = {
+  active_jobs: Array<{ id: string; kind: string; label: string; status: string; progress: number; current_step?: string | null; created_at: string }>;
+  usage: Array<{ account_id: number; phone: string; name: string; status: string; gather: number; add: number; dm: number; group: number; total: number; flood_waits: number }>;
+  active_accounts: number;
+  total_accounts: number;
+};
+
+export type CampaignProgress = {
+  campaign_id: number;
+  status: string;
+  progress: number;
+  sent: number;
+  total: number;
+  last_error?: string | null;
+  job_status?: string | null;
+  job_current_step?: string | null;
+  job_id?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+};
+
+export type CampaignReport = {
+  campaign_id: number;
+  campaign_name: string;
+  success: number;
+  skipped: number;
+  failed: number;
+  total: number;
+  failure_reasons: Record<string, number>;
+  per_account: Record<string, { sent: number; failed: number; flood: number }>;
+  failed_items: Array<string | Record<string, unknown>>;
+  duration_minutes: number;
+  generated_at: string;
+};
+
+export type GatherTemplate = {
+  id: number;
+  name: string;
+  source_label: string;
+  source_type: string;
+  extract_mode: string;
+  limit: number;
+  category?: string | null;
+  created_at: string;
+};
+
+export type SystemInfo = {
+  version: string;
+  python: string;
+  os: string;
+  cpu: string;
+  ram: string;
+  storage_disk: string;
+  storage_files: number;
+  storage_size: string;
+  uptime: string;
+  database: string;
+  counts: Record<string, number>;
+};
+
+export type BanMonitorStatus = {
+  enabled: boolean;
+  interval_minutes: number;
+  action: string;
+  last_run?: string | null;
 };

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BarChart3, FileText, FileBarChart, AlertTriangle, Upload, Calendar, Download, Gauge, MessageSquare, User, TrendingUp, Trophy, Trash2 } from "lucide-react";
 import { useNav } from "../nav";
 import { PageHeader, Button, Table, SectionTitle, useToast, StatCard, Alert, Spinner, EmptyState, ConfirmDialog, SearchInput, OptionButton, Field, Checkbox } from "../ui";
-import { apiFetch, type AccountPerformance, type ActivityLogRecord, type DashboardSummary, type LeaderboardRow } from "../lib/api";
+import { apiFetch, downloadApiFile, type AccountPerformance, type ActivityLogRecord, type DashboardSummary, type LeaderboardRow } from "../lib/api";
 
 const menu = [
   { id: "dashboard", label: "لوحة المؤشرات الحية", desc: "Live Dashboard", icon: Gauge },
@@ -105,77 +105,50 @@ function useDashboardAndLogs(limit = 100) {
 function TodayReport() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const { summary, logs, loading } = useDashboardAndLogs(30);
-
-  const infoCount = logs.filter((log) => log.level === "info").length;
-  const warnCount = logs.filter((log) => log.level === "warn").length;
-  const accountOps = logs.filter((log) => log.entity_type === "account").length;
-  const proxyOps = logs.filter((log) => log.entity_type === "proxy").length;
-  const [compare, setCompare] = useState(false);
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    apiFetch<any>("/reports/today").then(setData).catch((err) => show(err instanceof Error ? err.message : "تعذر تحميل التقرير", "danger")).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="animate-fade">
-      <PageHeader title="تقرير اليوم" icon={<BarChart3 className="h-5 w-5" />} />
-      {loading || !summary ? <Spinner label="جاري تحميل التقرير..." /> : (
+      <PageHeader title="تقرير اليوم" subtitle="أرقام حقيقية من قاعدة البيانات" icon={<BarChart3 className="h-5 w-5" />} />
+      {loading || !data ? <Spinner label="جاري تحميل التقرير..." /> : (
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard label="إجمالي الحسابات" value={summary.accounts_total} tone="accent" />
-            <StatCard label="الحسابات النشطة" value={summary.accounts_active} tone="brand" />
-            <StatCard label="إجمالي البروكسيات" value={summary.proxies_total} tone="brand" />
-            <StatCard label="الحملات النشطة" value={summary.campaigns_active} tone="warn" />
+            <StatCard label="مُجمَّع اليوم" value={data.gathered_today.toLocaleString()} tone="brand" />
+            <StatCard label="مُضاف اليوم" value={data.added_today.toLocaleString()} tone="accent" />
+            <StatCard label="رسائل DM اليوم" value={data.dm_today.toLocaleString()} tone="warn" />
+            <StatCard label="رسائل قروبات اليوم" value={data.group_today.toLocaleString()} tone="brand" />
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard label="إجمالي العمليات" value={data.total_operations_today.toLocaleString()} tone="brand" />
+            <StatCard label="FloodWaits" value={data.flood_today.toLocaleString()} tone="danger" />
+            <StatCard label="حسابات نشطة" value={`${data.accounts_active}/${data.accounts_total}`} tone="brand" />
+            <StatCard label="بروكسيهات نشطة" value={`${data.proxies_active}/${data.proxies_total}`} tone="accent" />
           </div>
           <div className="mt-4 card p-5">
-            <SectionTitle>الأنشطة المسجلة</SectionTitle>
-            <div className="grid gap-2 sm:grid-cols-4">
-              <StatCard label="سجلات info" value={infoCount} tone="accent" />
-              <StatCard label="تحذيرات" value={warnCount} tone="danger" />
-              <StatCard label="عمليات حسابات" value={accountOps} tone="brand" />
-              <StatCard label="عمليات بروكسي" value={proxyOps} tone="warn" />
-            </div>
-          </div>
-          <div className="mt-4 card p-5">
-            <div className="flex items-center justify-between">
-              <SectionTitle>═══ الأداء ═══</SectionTitle>
-              <Button variant="ghost" onClick={() => setCompare(!compare)}>📊 مقارنة بالأمس</Button>
-            </div>
+            <SectionTitle>═══ الأداء ═══</SectionTitle>
             <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-2">
-              <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">أفضل حساب أداءً</div><div className="font-bold text-brand-700">+966563456789 (55 عملية)</div></div>
-              <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3"><div className="text-xs text-surface-500">أكثر بروكسي استخداماً</div><div className="font-bold text-surface-800">185.12.45.10:1080</div></div>
-            </div>
-            {compare && (
-              <div className="mt-3">
-                <Table columns={["المقياس","اليوم","الأمس","الفرق%"]} rows={[
-                  ["تجميع","1,240","1,100","+12.7%"],
-                  ["إضافة","318","290","+9.7%"],
-                  ["رسائل DM","96","110","-12.7%"],
-                  ["حملات","4","3","+33%"],
-                ]} />
+              <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3">
+                <div className="text-xs text-surface-500">أفضل حساب أداءً اليوم</div>
+                <div className="font-bold text-brand-700">{data.best_account ? `${data.best_account.phone} (${data.best_account.operations} عملية)` : "لا توجد عمليات بعد"}</div>
               </div>
-            )}
+              <div className="rounded-xl bg-surface-50 border border-surface-200 px-4 py-3">
+                <div className="text-xs text-surface-500">مقارنة بالأمس</div>
+                <div className="font-bold text-surface-800">{data.compare_yesterday_pct === null ? "لا توجد بيانات للأمس" : `${data.compare_yesterday_pct >= 0 ? "+" : ""}${data.compare_yesterday_pct}%`}</div>
+              </div>
+            </div>
           </div>
           <div className="mt-4 flex gap-2">
-            <Button
-              variant="primary"
-              icon={<Download className="h-4 w-4" />}
-              onClick={() => {
-                downloadCsv("today-report.csv", [
-                  ["metric", "value"],
-                  ["accounts_total", String(summary.accounts_total)],
-                  ["accounts_active", String(summary.accounts_active)],
-                  ["proxies_total", String(summary.proxies_total)],
-                  ["proxies_active", String(summary.proxies_active)],
-                  ["campaigns_total", String(summary.campaigns_total)],
-                  ["campaigns_active", String(summary.campaigns_active)],
-                ]);
-                show("تم تصدير CSV");
-              }}
-            >
-              تصدير
-            </Button>
-            <Button onClick={() => push(["reports"])}>رجوع</Button>
+            <Button variant="primary" icon={<Download className="h-4 w-4" />} onClick={async () => { try { await downloadApiFile("/reports/export?period=today&format_value=pdf", "today-report.pdf"); } catch (err) { show(err instanceof Error ? err.message : "تعذر التصدير", "danger"); } }}>📄 تصدير PDF</Button>
+            <Button onClick={async () => { try { await downloadApiFile("/reports/export?period=today&format_value=csv", "today-report.csv"); } catch (err) { show(err instanceof Error ? err.message : "تعذر التصدير", "danger"); } }}>📊 تصدير CSV</Button>
           </div>
         </>
       )}
+      <div className="mt-4"><Button onClick={() => push(["reports"])}>رجوع</Button></div>
       {node}
     </div>
   );
@@ -184,35 +157,32 @@ function TodayReport() {
 function WeekReport() {
   const { push } = useNav();
   const { show, node } = useToast();
-  const { logs, loading } = useDashboardAndLogs(200);
-
-  const days = useMemo(() => {
-    const labels = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
-    const counts = new Array(7).fill(0);
-    logs.forEach((log) => {
-      counts[new Date(log.created_at).getDay()] += 1;
-    });
-    return labels.map((label, index) => ({ label, value: counts[index] }));
-  }, [logs]);
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    apiFetch<any>("/reports/week").then(setData).catch((err) => show(err instanceof Error ? err.message : "تعذر تحميل التقرير", "danger")).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="animate-fade">
-      <PageHeader title="تقرير أسبوعي" icon={<Calendar className="h-5 w-5" />} />
-      {loading ? <Spinner label="جاري تجهيز الرسم..." /> : (
+      <PageHeader title="تقرير أسبوعي" subtitle="7 أيام حقيقية" icon={<Calendar className="h-5 w-5" />} />
+      {loading || !data ? <Spinner label="جاري التحميل..." /> : (
         <>
-          <div className="card p-5">
-            <SectionTitle>توزيع السجلات على أيام الأسبوع</SectionTitle>
-            <div className="flex h-48 items-end justify-between gap-2">
-              {days.map((day) => (
-                <div key={day.label} className="flex flex-1 flex-col items-center gap-2">
-                  <div className="w-full rounded-t-lg bg-gradient-to-t from-brand-600 to-brand-400 transition-all" style={{ height: `${Math.max(day.value * 14, 18)}px` }} />
-                  <span className="text-xs text-surface-500">{day.label}</span>
-                </div>
-              ))}
-            </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard label="إجمالي التجميع" value={data.totals.gathered.toLocaleString()} tone="brand" />
+            <StatCard label="إجمالي الإضافة" value={data.totals.added.toLocaleString()} tone="accent" />
+            <StatCard label="إجمالي DM" value={data.totals.dm.toLocaleString()} tone="warn" />
+            <StatCard label="أفضل يوم" value={data.best_day} tone="brand" />
+          </div>
+          <div className="mt-4 card p-5">
+            <SectionTitle>النشاط اليومي</SectionTitle>
+            <Table columns={["اليوم", "تجميع", "إضافة", "DM", "قروبات", "Flood"]} rows={data.days.map((d: any) => [
+              d.date, d.gathered.toLocaleString(), d.added.toLocaleString(), d.dm.toLocaleString(), d.group.toLocaleString(), d.flood.toLocaleString(),
+            ])} />
           </div>
           <div className="mt-4 flex gap-2">
-            <Button variant="primary" icon={<Upload className="h-4 w-4" />} onClick={() => show("تم تجهيز التقرير الأسبوعي")}>تصدير</Button>
+            <Button variant="primary" icon={<Upload className="h-4 w-4" />} onClick={async () => { try { await downloadApiFile("/reports/export?period=week&format_value=pdf", "week-report.pdf"); } catch (err) { show(err instanceof Error ? err.message : "تعذر التصدير", "danger"); } }}>📄 تصدير PDF</Button>
             <Button onClick={() => push(["reports"])}>رجوع</Button>
           </div>
         </>
@@ -429,6 +399,7 @@ function ExportReport() {
   const [customTo, setCustomTo] = useState("2026-07-01");
   const [include, setInclude] = useState({ gather: true, add: true, dm: true, security: true, accounts: true, charts: true });
   const [format, setFormat] = useState("csv");
+  const [exporting, setExporting] = useState(false);
   const [schedule, setSchedule] = useState({ daily: false, weekly: false, monthly: false });
   const [sendTo, setSendTo] = useState("saved");
   const [sendTarget, setSendTarget] = useState("");
@@ -465,14 +436,21 @@ function ExportReport() {
               <OptionButton key={id} label={label} selected={format === id} onClick={() => setFormat(id)} />
             ))}
           </div>
-          <Button variant="primary" className="w-full" disabled={loading} onClick={() => {
-            if (format === "csv") {
-              downloadCsv("report.csv", [["time", "level", "action", "entity_type", "message"], ...logs.map((log) => [log.created_at, log.level, log.action, log.entity_type || "", log.message])]);
-            } else {
-              const blob = new Blob([JSON.stringify({ period, include, logs }, null, 2)], { type: "application/octet-stream" });
-              const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `report.${format === "txt" ? "txt" : "json"}`; a.click(); URL.revokeObjectURL(url);
+          <Button variant="primary" className="w-full" disabled={loading || exporting} onClick={async () => {
+            setExporting(true);
+            try {
+              if (format === "csv" || format === "txt" || format === "pdf") {
+                await downloadApiFile(`/reports/export?period=${period === "custom" ? "week" : period}&format_value=${format}`, `report-${period}.${format}`);
+                show("تم تنزيل التقرير");
+              } else {
+                show("صيغة Excel تُصدَّر حالياً كـ CSV");
+                await downloadApiFile(`/reports/export?period=${period === "custom" ? "week" : period}&format_value=csv`, "report.csv");
+              }
+            } catch (err) {
+              show(err instanceof Error ? err.message : "تعذر التصدير", "danger");
+            } finally {
+              setExporting(false);
             }
-            show("تم إنشاء التقرير وإرساله");
           }}>✅ تصدير الآن</Button>
         </div>
         <div className="card p-6 space-y-4">
@@ -487,7 +465,7 @@ function ExportReport() {
             <OptionButton label="📢 قناة/مجموعة" selected={sendTo === "channel"} onClick={() => setSendTo("channel")} />
           </div>
           {sendTo !== "saved" && <Field label="Telegram ID / @username / رابط" value={sendTarget} onChange={setSendTarget} />}
-          <Button onClick={() => { apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key: "report_schedule", value: JSON.stringify({ schedule, sendTo, sendTarget }), is_secret: false, description: "report schedule" }] }) }).then(() => show("تم حفظ إعدادات الجدولة")).catch(() => show("تم الحفظ محلياً")); }}>💾 حفظ إعدادات الجدولة</Button>
+          <Button onClick={() => { apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key: "report_schedule", value: JSON.stringify({ schedule, sendTo, sendTarget }), is_secret: false, description: "report schedule" }] }) }).then(() => show("تم حفظ إعدادات الجدولة — ستنفذها خدمة الإشعارات")).catch((err) => show(err instanceof Error ? err.message : "تعذر الحفظ", "danger")); }}>💾 حفظ إعدادات الجدولة</Button>
         </div>
       </div>
       <div className="mt-4"><Button onClick={() => push(["reports"])}>رجوع</Button></div>
@@ -496,20 +474,41 @@ function ExportReport() {
   );
 }
 
+function TodayMini() {
+  const [data, setData] = useState<any>(null);
+  useEffect(() => { apiFetch<any>("/reports/today").then(setData).catch(() => undefined); }, []);
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <StatCard label="مُجمَّع اليوم" value={(data?.gathered_today ?? 0).toLocaleString()} tone="brand" />
+      <StatCard label="مُضاف اليوم" value={(data?.added_today ?? 0).toLocaleString()} tone="accent" />
+      <StatCard label="رسائل DM اليوم" value={(data?.dm_today ?? 0).toLocaleString()} tone="warn" />
+      <StatCard label="رسائل قروبات اليوم" value={(data?.group_today ?? 0).toLocaleString()} tone="brand" />
+    </div>
+  );
+}
+
 function LiveDashboard() {
   const { push } = useNav();
   const { summary, logs, loading } = useDashboardAndLogs(10);
   const [live, setLive] = useState(true);
+  const [activeJobs, setActiveJobs] = useState<any[]>([]);
+  useEffect(() => {
+    const loadJobs = () => apiFetch<any[]>("/jobs/runs?status_value=running").then(setActiveJobs).catch(() => undefined);
+    void loadJobs();
+    const timer = window.setInterval(loadJobs, 10000);
+    return () => window.clearInterval(timer);
+  }, []);
   return (
     <div className="animate-fade">
       <PageHeader title="لوحة المؤشرات الحية" subtitle={live ? "تحديث تلقائي كل 30 ثانية" : "مؤقّت"} icon={<Gauge className="h-5 w-5" />} />
       {loading ? <Spinner label="جاري التحميل..." /> : (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard label="مُجمَّع اليوم" value="1,240" tone="brand" />
-            <StatCard label="مُضاف اليوم" value="318" tone="accent" />
-            <StatCard label="رسائل DM اليوم" value="96" tone="warn" />
-            <StatCard label="حسابات نشطة الآن" value={`${summary?.accounts_active ?? 0}/${summary?.accounts_total ?? 0}`} tone="brand" />
+          <TodayMini />
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard label="حسابات نشطة" value={`${summary?.accounts_active ?? 0}/${summary?.accounts_total ?? 0}`} tone="brand" />
+            <StatCard label="بروكسيهات نشطة" value={`${summary?.proxies_active ?? 0}/${summary?.proxies_total ?? 0}`} tone="accent" />
+            <StatCard label="حملات نشطة" value={summary?.campaigns_active ?? 0} tone="warn" />
+            <StatCard label="عمليات نشطة الآن" value={activeJobs.length} tone="brand" />
           </div>
           <div className="mt-4 card p-5">
             <SectionTitle>آخر 10 عمليات (حي)</SectionTitle>
@@ -711,8 +710,8 @@ function ManageLogs() {
   const [confirm, setConfirm] = useState(false);
   const [summary, setSummary] = useState<{ total_logs: number; log_size_mb: number } | null>(null);
   useEffect(() => { apiFetch<{ total_logs: number; log_size_mb: number }>("/reports/log-management").then(setSummary).catch(() => undefined); }, []);
-  const clear = (days: number) => apiFetch(`/reports/logs?older_than_days=${days}`, { method: "DELETE" }).then(() => { show("تم حذف السجلات"); }).catch(() => show("تم الحذف محلياً"));
-  const clearAll = () => apiFetch(`/reports/logs?clear_all=true`, { method: "DELETE" }).then(() => { show("تم حذف جميع السجلات", "danger"); }).catch(() => show("تم الحذف محلياً"));
+  const clear = (days: number) => apiFetch(`/reports/logs?older_than_days=${days}`, { method: "DELETE" }).then(() => { show("تم حذف السجلات"); }).catch((err) => show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger"));
+  const clearAll = () => apiFetch(`/reports/logs?clear_all=true`, { method: "DELETE" }).then(() => { show("تم حذف جميع السجلات", "danger"); }).catch((err) => show(err instanceof Error ? err.message : "تعذر التنفيذ", "danger"));
   return (
     <div className="animate-fade">
       <PageHeader title="إدارة السجلات" icon={<Trash2 className="h-5 w-5" />} />
