@@ -109,155 +109,6 @@ function useQueueHealth() {
   return queueEnabled;
 }
 
-/* ── shared running screen ── */
-function AddRunning({ summary, onBack }: { summary: Record<string,string>; onBack: () => void }) {
-  const { push } = useNav();
-  const { show, node } = useToast();
-  const [progress, setProgress] = useState(0);
-  const [running, setRunning]   = useState(true);
-  const [paused, setPaused]     = useState(false);
-  const [done, setDone]         = useState(false);
-  const [showMidReport, setShowMidReport] = useState(false);
-  const [resumeOpts, setResumeOpts] = useState(false);
-  const [editOpts, setEditOpts] = useState(false);
-  const [minutes, setMinutes]   = useState("15");
-  const [editDelay, setEditDelay] = useState("90");
-  const [editDaily, setEditDaily] = useState("20");
-  const [editSwitch, setEditSwitch] = useState("5");
-  const [showFlood, setShowFlood] = useState(false);
-  const [showBan, setShowBan]     = useState(false);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      setProgress((p) => {
-        if (p >= 100) { clearInterval(t); setRunning(false); setDone(true); return 100; }
-        return p + 3;
-      });
-    }, 120);
-    return () => clearInterval(t);
-  }, []);
-
-  return (
-    <div className="space-y-4">
-      <div className="card p-5 space-y-3">
-        <Progress value={progress} label={done?"✅ اكتملت الإضافة!":"📤 جاري الإضافة..."} sub={`${progress}% [${Math.floor(progress*141)}/14135]`} />
-        {running && (
-          <>
-            <div className="grid grid-cols-2 gap-2 text-xs text-surface-500 sm:grid-cols-4">
-              <div>الحساب: +966501234567</div>
-              <div>أُضيف: {Math.floor(progress*1.4)}/5</div>
-              <div>اليوم: 18/20</div>
-              <div className="text-brand-600 font-bold">نشط ✅</div>
-            </div>
-            <div className="text-xs text-surface-400">
-              آخر الإجراءات: ✅@user1 ⚠️@user2 ❌@user3 | التأخير التالي: {87-Math.floor(progress*0.5)}ث
-            </div>
-          </>
-        )}
-        {done && (
-          <Alert tone="success" title="✅ اكتملت الإضافة">
-            <div className="mt-1 text-xs">✅ ناجح: 13,500 | ⚠️ تخطي: 500 | ❌ فاشل: 135</div>
-          </Alert>
-        )}
-        <div className="flex flex-wrap gap-2">
-          {running && !paused && <Button variant="warn" icon={<Pause className="h-4 w-4" />} onClick={() => { setPaused(true); setResumeOpts(true); }}>⏸ إيقاف مؤقت</Button>}
-          {running && !paused && <Button icon={<BarChart3 className="h-4 w-4" />} onClick={() => setShowMidReport(!showMidReport)}>📊 تقرير</Button>}
-          {running && !paused && <Button icon={<Plus className="h-4 w-4" />} onClick={() => show("+30% تأخير")}>+30%</Button>}
-          {running && !paused && <Button icon={<Minus className="h-4 w-4" />} onClick={() => show("-30% تأخير")}>-30%</Button>}
-          {running && !paused && <Button variant="danger" icon={<Square className="h-4 w-4" />} onClick={() => { setRunning(false); setDone(true); setProgress(100); }}>⏹ إيقاف وحفظ</Button>}
-          {running && <Button onClick={() => { setShowFlood(!showFlood); setShowBan(false); }}>⚡ محاكاة FloodWait</Button>}
-          {running && <Button onClick={() => { setShowBan(!showBan); setShowFlood(false); }}>⛔ محاكاة حظر</Button>}
-          {done && (
-            <>
-              <Button onClick={() => show("تم تصدير التقرير")}>📤 تصدير</Button>
-              <Button onClick={() => show("عرض قائمة الفاشلة")}>📋 الفاشلة</Button>
-              <Button variant="primary" onClick={() => show("إعادة الإضافة للفاشلة")}>🔁 إعادة الفاشلة</Button>
-              <Button onClick={onBack}>🏠 رجوع</Button>
-            </>
-          )}
-        </div>
-
-        {running && paused && (
-          <div className="rounded-xl border border-surface-200 bg-surface-50 p-4 space-y-3">
-            <Alert tone="info" title="⏸️ متوقف مؤقتاً | حُفظت نقطة التقدم" />
-            {!resumeOpts && (
-              <Button variant="primary" icon={<Play className="h-4 w-4" />} onClick={() => setPaused(false)}>▶️ استئناف الآن</Button>
-            )}
-            {resumeOpts && (
-              <div className="space-y-3">
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="primary" icon={<Play className="h-4 w-4" />} onClick={() => setPaused(false)}>▶️ استئناف الآن</Button>
-                  <Button variant="ghost" onClick={() => { setMinutes("15"); show(`سأستأنف بعد ${minutes} دقيقة`); setPaused(false); }}>⏱️ استئناف بعد فترة</Button>
-                  <Button variant="ghost" onClick={() => setEditOpts(!editOpts)}>✏️ تعديل إعدادات ثم استئناف</Button>
-                </div>
-                {!editOpts && (
-                  <Field label="الاستئناف بعد (دقيقة)" value={minutes} onChange={setMinutes} />
-                )}
-                {editOpts && (
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    <InlineEdit label="⏱️ التأخير (ث)" value={editDelay} onSave={setEditDelay} />
-                    <InlineEdit label="📊 الحد اليومي" value={editDaily} onSave={setEditDaily} />
-                    <InlineEdit label="🔢 حد الإضافة/تبديل" value={editSwitch} onSave={setEditSwitch} />
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <Button variant="primary" onClick={() => { show("تم تعديل الإعدادات والاستئناف"); setPaused(false); }}>✅ تعديل والاستئناف</Button>
-                  <Button variant="danger" onClick={() => { setRunning(false); setDone(true); setProgress(100); }}>⏹️ إنهاء + حفظ التقدم</Button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {running && showFlood && (
-          <div className="rounded-xl border border-warn-200 bg-warn-50 p-4 space-y-2">
-            <Alert tone="warn" title="⚠️ FloodWait تم اكتشافه">
-              <div className="mt-1 space-y-1 text-xs">
-                <div>✅ تبديل تلقائي للحساب التالي</div>
-                <div>✅ زيادة التأخير 30% احترازياً</div>
-              </div>
-            </Alert>
-            <div className="flex gap-2">
-              <Button variant="primary" onClick={() => setShowFlood(false)}>OK — متابعة</Button>
-              <Button variant="warn" onClick={() => { setPaused(true); setResumeOpts(true); setShowFlood(false); }}>P — إيقاف مؤقت</Button>
-              <Button variant="danger" onClick={() => { setRunning(false); setDone(true); setProgress(100); setShowFlood(false); }}>X — إيقاف</Button>
-            </div>
-          </div>
-        )}
-        {running && showBan && (
-          <div className="rounded-xl border border-danger-200 bg-danger-50 p-4 space-y-2">
-            <Alert tone="danger" title="⛔ حظر حساب">
-              <div className="mt-1 space-y-1 text-xs">
-                <div>✅ إزالة من التدوير + تبديل</div>
-                <div>🔔 إشعار بالحظر</div>
-              </div>
-            </Alert>
-            <Button variant="primary" onClick={() => setShowBan(false)}>OK — متابعة</Button>
-          </div>
-        )}
-        {showMidReport && running && (
-          <div className="border-t border-surface-100 pt-3 space-y-2">
-            <SectionTitle>📊 تقرير مفصل للحظة</SectionTitle>
-            <div className="grid gap-1 text-xs">
-              <div className="flex justify-between"><span>✅ ناجح</span><span className="font-bold text-brand-700">{Math.floor(progress*135)}</span></div>
-              <div className="flex justify-between"><span>⚠️ تخطي (خصوصية)</span><span className="font-bold text-warn-700">{Math.floor(progress*5)}</span></div>
-              <div className="flex justify-between"><span>❌ فاشل</span><span className="font-bold text-danger-700">{Math.floor(progress*1.35)}</span></div>
-            </div>
-            <Table columns={["حساب","أرسل","نجح","فشل","حالة"]} rows={([] as Array<{phone:string}>).slice(0,3).map((a)=>[
-              a.phone,
-              String(Math.floor(progress*0.5)),
-              String(Math.floor(progress*0.45)),
-              String(Math.floor(progress*0.05)),
-              <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">✅ نشط</span>,
-            ])} />
-          </div>
-        )}
-      </div>
-      {node}
-    </div>
-  );
-}
-
 /* ── AddFromCsv ── */
 function AddFromCsv() {
   const { push } = useNav();
@@ -559,8 +410,6 @@ function AddManual() {
   const queueEnabled = useQueueHealth();
   const [users, setUsers]   = useState("");
   const [target, setTarget] = useState("@my_group");
-  const [checking, setChecking] = useState(false);
-  const [checked, setChecked]   = useState(false);
   const [running, setRunning] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [result, setResult] = useState<AddResult | null>(null);
@@ -591,6 +440,10 @@ function AddManual() {
 
   const userList = users.split(/\r?\n/).map((u) => u.trim()).filter(Boolean);
 
+  // Quick validation: check if entries look like usernames or IDs
+  const validEntries = userList.filter(u => u.startsWith("@") || /^\d+$/.test(u));
+  const invalidEntries = userList.filter(u => !u.startsWith("@") && !/^\d+$/.test(u));
+
   const startManual = async () => {
     setRunning(true);
     setResult(null);
@@ -614,28 +467,35 @@ function AddManual() {
 
   return (
     <div className="animate-fade">
-      <PageHeader title="إضافة يدوية" icon={<PenLine className="h-5 w-5" />} />
+      <PageHeader title="إضافة يدوية" subtitle="إضافة حقيقية عبر InviteToChannel" icon={<PenLine className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
         <Field label="@username أو UserID (واحد per سطر)" placeholder={"@user1\n123456789\n@user2"} value={users} onChange={setUsers} />
-        {!checking && !checked && users && (
-          <Button className="w-full" onClick={() => { setChecking(true); setTimeout(()=>{ setChecking(false); setChecked(true); },1200); }}>🔍 فحص المستخدمين</Button>
-        )}
-        {checking && <Progress value={50} label="🔍 جاري التحقق..." sub="50%" tone="accent" />}
-        {checked && (
-          <Alert tone="success" title="نتائج الفحص">
+        {userList.length > 0 && (
+          <Alert tone={invalidEntries.length > 0 ? "warn" : "success"} title={`🔍 نتائج الفحص السريع`}>
             <div className="mt-1 flex gap-3 text-xs">
-              <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">✅مدخلات: {userList.length}</span>
-              <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">❌قد يفشل بعضها لاحقاً</span>
+              <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">✅ صالح: {validEntries.length}</span>
+              {invalidEntries.length > 0 && <span className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">⚠️ قد يفشل: {invalidEntries.length}</span>}
+              <span className="chip bg-surface-100 text-surface-600 ring-1 ring-surface-300">الإجمالي: {userList.length}</span>
             </div>
+            <div className="mt-1 text-xs text-surface-500">سيتم التحقق من كل مستخدم عبر Telethon عند الإضافة الفعلية — غير الموجودين والمحظورين سيرسبون تلقائياً.</div>
           </Alert>
         )}
         <InlineEdit label="رابط المجموعة المستهدفة" value={target} onSave={setTarget} placeholder="@my_group" />
         <Alert tone="info" title={queueEnabled ? "سيتم تنفيذ المهمة عبر Queue عند البدء" : "سيتم التنفيذ المباشر كـ fallback"} />
         <div className="flex gap-2">
-          <Button variant="primary" className="flex-1" disabled={!userList.length || running} onClick={() => void startManual()}>{running ? "جاري التشغيل..." : "بدء الإضافة اليدوية"}</Button>
-          <Button onClick={() => push(["add","csv"])}>متابعة للإعدادات التفصيلية</Button>
+          <Button variant="primary" className="flex-1" disabled={!userList.length || running} onClick={() => void startManual()}>
+            {running ? "جاري التشغيل..." : "بدء الإضافة اليدوية"}
+          </Button>
+          <Button onClick={() => push(["add", "csv"])}>متابعة للإعدادات التفصيلية</Button>
         </div>
-        {running && <Progress value={jobId ? 55 : 80} label={jobId ? `المهمة في الانتظار: ${jobId}` : "جاري تجهيز العملية..."} sub={jobId ? "Queue" : "Inline"} tone="accent" />}
+        <JobProgressCard jobId={jobId} onDone={(run) => {
+          setRunning(false);
+          if (run.status === "failed") { show(run.error?.split("\n")[0] || "فشلت الإضافة", "danger"); return; }
+          try {
+            const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+            if (parsed) setResult(parsed as AddResult);
+          } catch { /* ignore */ }
+        }} />
         {result && (
           <Alert tone="success" title="اكتملت العملية اليدوية">
             <div className="mt-1 text-xs">✅ناجح: {result.success_count} | ⚠️تخطي: {result.skipped_count} | ❌فاشل: {result.failed_count}</div>
@@ -668,44 +528,19 @@ function SmartAdd() {
   const queueEnabled = useQueueHealth();
   const [sourceLink, setSourceLink] = useState("");
   const [targetLink, setTargetLink] = useState("");
-  const [analyzed, setAnalyzed]     = useState(false);
-  const [analyzing, setAnalyzing]   = useState(false);
   const [running, setRunning] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [result, setResult] = useState<AddResult | null>(null);
   const [filters, setFilters] = useState({ activeOnly:false, onlineOnly:false, hasUser:true, skipExisting:true, skipBlacklist:true });
 
-  useEffect(() => {
-    if (!jobId) return;
-    const timer = window.setInterval(async () => {
-      try {
-        const status = await apiFetch<JobStatusResponse>(`/add/jobs/${jobId}`);
-        if (status.status === "done") {
-          setResult(status.result as unknown as AddResult);
-          setRunning(false);
-          window.clearInterval(timer);
-        }
-        if (status.status === "failed") {
-          show(status.error || "فشلت المهمة", "danger");
-          setRunning(false);
-          window.clearInterval(timer);
-        }
-      } catch (err) {
-        show(err instanceof Error ? err.message : "تعذر متابعة المهمة", "danger");
-        setRunning(false);
-        window.clearInterval(timer);
-      }
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [jobId, show]);
-
   const startSmart = async () => {
+    if (!sourceLink.trim() || !targetLink.trim()) { show("أدخل رابط المجموعة المصدر والهدف", "danger"); return; }
     setRunning(true);
     setResult(null);
     try {
       const response = await apiFetch<JobStartResponse>("/add/smart", {
         method: "POST",
-        body: JSON.stringify({ source_label: sourceLink, target_label: targetLink, method: "direct", limit: 1000, run_inline: queueEnabled === false }),
+        body: JSON.stringify({ source_label: sourceLink.trim(), target_label: targetLink.trim(), method: "direct", limit: 1000, run_inline: queueEnabled === false }),
       });
       show(response.message);
       if (response.mode === "finished") {
@@ -722,31 +557,39 @@ function SmartAdd() {
 
   return (
     <div className="animate-fade">
-      <PageHeader title="إضافة ذكية (Smart Add)" icon={<Target className="h-5 w-5" />} />
+      <PageHeader title="إضافة ذكية (Smart Add)" subtitle="تجميع + إضافة مباشرة عبر Telethon" icon={<Target className="h-5 w-5" />} />
       <div className="mx-auto max-w-lg card p-6 space-y-4">
-        <Alert tone="info" title="🎯 يجمع من مجموعة مصدر ويضيف لمجموعة هدف مباشرة — بدون حفظ ملف وسيط" />
+        <Alert tone="info" title="🎯 يجمع من مجموعة مصدر ويضيف لمجموعة هدف مباشرة — تجميع حقيقي ثم InviteToChannel">
+          <div className="mt-1 text-xs">سيتم: 1) تجميع الأعضاء من المصدر عبر Telethon → 2) إضافتهم للهدف عبر InviteToChannel</div>
+        </Alert>
         <Field label="رابط المجموعة المصدر" placeholder="@source_group" value={sourceLink} onChange={setSourceLink} />
         <Field label="رابط المجموعة الهدف"  placeholder="@target_group" value={targetLink} onChange={setTargetLink} />
-        {!analyzing && !analyzed && sourceLink && targetLink && (
-          <Button className="w-full" onClick={() => { setAnalyzing(true); setTimeout(()=>{ setAnalyzing(false); setAnalyzed(true); },1500); }}>🔍 جلب المعلومات</Button>
-        )}
-        {analyzing && <Progress value={60} label="🔍 جاري التحليل..." sub="60%" tone="accent" />}
-        {analyzed && (
+        {sourceLink && targetLink && (
           <div className="space-y-3">
-            <Alert tone="info" title="📊 سيتم إنشاء export ثم عملية إضافة في الخلفية">
-              <div className="text-xs mt-0.5">🎯 مرشح للإضافة: تقديري حسب limit الداخلي والفلترة المختارة</div>
-            </Alert>
             <SectionTitle>فلاتر الاستهداف</SectionTitle>
             <Checkbox label="النشطون فقط (أرسلوا رسائل)"  checked={filters.activeOnly}    onChange={(v)=>setFilters({...filters,activeOnly:v})} />
             <Checkbox label="المتواجدون حالياً فقط"         checked={filters.onlineOnly}    onChange={(v)=>setFilters({...filters,onlineOnly:v})} />
             <Checkbox label="لديهم @username"               checked={filters.hasUser}       onChange={(v)=>setFilters({...filters,hasUser:v})} />
             <Checkbox label="استبعاد الموجودين في الهدف"   checked={filters.skipExisting}  onChange={(v)=>setFilters({...filters,skipExisting:v})} />
             <Checkbox label="استبعاد القائمة السوداء"       checked={filters.skipBlacklist} onChange={(v)=>setFilters({...filters,skipBlacklist:v})} />
-            <Button variant="primary" className="w-full" disabled={running} onClick={() => void startSmart()}>{running ? "جاري التشغيل..." : "✅ بدء الإضافة الذكية"}</Button>
+            <Button variant="primary" className="w-full" disabled={running} onClick={() => void startSmart()}>
+              {running ? "جاري التشغيل..." : "✅ بدء الإضافة الذكية"}
+            </Button>
           </div>
         )}
-        {running && <Progress value={jobId ? 55 : 80} label={jobId ? `المهمة في الانتظار: ${jobId}` : "جاري تجهيز العملية..."} sub={jobId ? "Queue" : "Inline"} tone="accent" />}
-        {result && <Alert tone="success" title="اكتملت الإضافة الذكية"><div className="mt-1 text-xs">✅ناجح: {result.success_count} | ⚠️تخطي: {result.skipped_count} | ❌فاشل: {result.failed_count}</div></Alert>}
+        <JobProgressCard jobId={jobId} onDone={(run) => {
+          setRunning(false);
+          if (run.status === "failed") { show(run.error?.split("\n")[0] || "فشلت الإضافة الذكية", "danger"); return; }
+          try {
+            const parsed = run.result_json ? JSON.parse(run.result_json) : null;
+            if (parsed) setResult(parsed as AddResult);
+          } catch { /* ignore */ }
+        }} />
+        {result && (
+          <Alert tone="success" title="اكتملت الإضافة الذكية">
+            <div className="mt-1 text-xs">✅ناجح: {result.success_count} | ⚠️تخطي: {result.skipped_count} | ❌فاشل: {result.failed_count}</div>
+          </Alert>
+        )}
       </div>
       {node}
     </div>
@@ -1017,6 +860,10 @@ function AddLogs() {
   if (selected !== null) {
     const log = operations.find(l=>l.id===selected);
     if (!log) return null;
+    let details: Record<string, any> = {};
+    try { details = log.details_json ? JSON.parse(log.details_json) : {}; } catch { /* ignore */ }
+    const failureReasons = details.failure_reasons || {};
+    const perAccount = details.per_account || {};
     return (
       <div className="animate-fade">
         <PageHeader title={`تفاصيل: ${log.source_label}`} icon={<BarChart3 className="h-5 w-5" />} />
@@ -1028,25 +875,34 @@ function AddLogs() {
             <StatCard label="الهدف" value={log.target_label}                   tone="accent" />
           </div>
           <div className="card p-5">
-            <SectionTitle>أداء كل حساب</SectionTitle>
-            <Table columns={["حساب","أرسل","نجح","فشل"]} rows={([] as Array<{phone:string}>).slice(0,3).map((a)=>[
-              a.phone,
-              String(Math.floor(log.total_count/3)),
-              String(Math.floor(log.success_count/3)),
-              String(Math.floor(log.failed_count/3)),
-            ])} />
+            <SectionTitle>معلومات العملية</SectionTitle>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <SRow label="المصدر" value={log.source_label} />
+              <SRow label="الهدف" value={log.target_label} />
+              <SRow label="الطريقة" value={log.method} />
+              <SRow label="التاريخ" value={new Date(log.created_at).toLocaleString("ar-SA")} />
+              <SRow label="الإجمالي" value={String(log.total_count)} />
+              <SRow label="معدل النجاح" value={`${Math.round((log.success_count / Math.max(1, log.total_count)) * 100)}%`} />
+            </div>
           </div>
-          <div className="card p-5">
-            <SectionTitle>أسباب الفشل</SectionTitle>
-            <Table columns={["السبب","العدد"]} rows={[
-              ["UserPrivacyRestricted",String(Math.max(1, Math.floor(log.failed_count*0.5)))],
-              ["FloodWait",String(Math.max(1, Math.floor(log.failed_count*0.2)))],
-              ["UserDeactivated",String(Math.max(1, Math.floor(log.failed_count*0.15)))],
-              ["PeerFlood",String(Math.max(1, Math.floor(log.failed_count*0.1)))],
-            ]} />
-          </div>
+          {Object.keys(perAccount).length > 0 && (
+            <div className="card p-5">
+              <SectionTitle>أداء كل حساب</SectionTitle>
+              <Table columns={["حساب","أرسل","نجح","فشل"]} rows={Object.entries(perAccount).map(([phone, stats]: [string, any]) => [
+                phone, String(stats.sent || 0), String(stats.sent - (stats.failed || 0)), String(stats.failed || 0)
+              ])} />
+            </div>
+          )}
+          {Object.keys(failureReasons).length > 0 && (
+            <div className="card p-5">
+              <SectionTitle>أسباب الفشل</SectionTitle>
+              <Table columns={["السبب","العدد"]} rows={Object.entries(failureReasons).map(([reason, count]) => [
+                reason, String(count)
+              ])} />
+            </div>
+          )}
           <div className="flex gap-2">
-            <Button onClick={() => show("تم تصدير التقرير")}>📤 تصدير PDF/CSV</Button>
+            <Button onClick={() => { const csv = ["ناجح,تخطي,فاشل,الإجمالي", `${log.success_count},${log.skipped_count},${log.failed_count},${log.total_count}`].join("\n"); const blob = new Blob([csv], { type: "text/csv" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `add-report-${log.id}.csv`; a.click(); URL.revokeObjectURL(url); show("تم تصدير CSV"); }}>📤 تصدير CSV</Button>
             <Button onClick={() => setSelected(null)}>🔙 رجوع</Button>
           </div>
         </div>
