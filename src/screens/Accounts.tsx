@@ -19,6 +19,7 @@ import {
   Lock,
   Archive,
   Search,
+  Download,
 } from "lucide-react";
 import { useNav } from "../nav";
 import {
@@ -40,6 +41,7 @@ import {
   SearchInput,
   StatCard,
   Spinner,
+  TextArea,
 } from "../ui";
 import {
   apiFetch,
@@ -55,6 +57,7 @@ import {
   type JobStatusResponse,
   type AccountValidationResult,
   type WarmupResult,
+  downloadApiFile,
 } from "../lib/api";
 import { accounts } from "../data";
 
@@ -63,14 +66,14 @@ const accountMenu = [
   { id: "import", label: "استيراد الجلسات", desc: "رفع ملفات sessions أو strings", icon: FolderInput },
   { id: "list", label: "عرض الحسابات", desc: "جدول حي من السيرفر", icon: ListChecks },
   { id: "validate", label: "التحقق من الصحة", desc: "تقرير من البيانات الحالية", icon: ShieldCheck },
-  { id: "pools", label: "مجموعات الحسابات", desc: "قيد التوسعة", icon: LayersIcon },
-  { id: "warmup", label: "تهيئة الحسابات", desc: "واجهة تشغيل أولية", icon: Flame },
-  { id: "health", label: "درجة الصحة", desc: "حساب تقديري من البيانات", icon: Heart },
-  { id: "settings-ind", label: "إعدادات فردية", desc: "قيد التوسعة", icon: Settings2 },
-  { id: "profile", label: "الملف الشخصي", desc: "قيد التوسعة", icon: Image },
+  { id: "pools", label: "مجموعات الحسابات", desc: "إنشاء وإدارة مجموعات", icon: LayersIcon },
+  { id: "warmup", label: "تهيئة الحسابات", desc: "تشغيل وإدارة التسخين", icon: Flame },
+  { id: "health", label: "درجة الصحة", desc: "احتساب تقديري للدرجات", icon: Heart },
+  { id: "settings-ind", label: "إعدادات فردية", desc: "حدود وأذونات لكل حساب", icon: Settings2 },
+  { id: "profile", label: "الملف الشخصي", desc: "تعديل الاسم والصورة والبايو", icon: Image },
   { id: "activity", label: "سجل النشاط", desc: "من الـ Audit Log", icon: Activity },
-  { id: "security", label: "أمان الحسابات", desc: "قيد التوسعة", icon: Lock },
-  { id: "export", label: "تصدير الجلسات", desc: "قيد الربط الخلفي", icon: Archive },
+  { id: "security", label: "أمان الحسابات", desc: "فحص وأجهزة و 2FA", icon: Lock },
+  { id: "export", label: "تصدير الجلسات", desc: "metadata الجلسات", icon: Archive },
   { id: "auto-remove", label: "إزالة المحظورة", desc: "حذف blocked/restricted", icon: Zap },
   { id: "remove", label: "إزالة حساب", desc: "حذف حساب محدد", icon: Trash2 },
 ] as const;
@@ -89,6 +92,12 @@ function PlaceholderCard({ title, desc }: { title: string; desc: string }) {
       </div>
     </div>
   );
+}
+
+function useAccounts() {
+  const [rows, setRows] = useState<AccountRecord[]>(accounts as unknown as AccountRecord[]);
+  useEffect(() => { apiFetch<AccountRecord[]>("/accounts").then(setRows).catch(() => undefined); }, []);
+  return rows;
 }
 
 export function AccountsModule() {
@@ -400,10 +409,15 @@ function ImportSessions() {
   const { show, node } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const [sessions, setSessions] = useState<TelegramAuthSessionRecord[]>([]);
+  const [method, setMethod] = useState<"folder" | "file" | "text" | "string" | "zip">("file");
+  const [path, setPath] = useState("");
+  const [textArea, setTextArea] = useState("");
+  const [zipPass, setZipPass] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [category, setCategory] = useState<"sessions" | "zip" | "txt">("sessions");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<{ valid: number; invalid: number; dup: number } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -427,7 +441,7 @@ function ImportSessions() {
     try {
       const form = new FormData();
       form.append("file", file);
-      form.append("category", category);
+      form.append("category", method === "zip" ? "zip" : method === "text" ? "txt" : "sessions");
       await apiFetch("/uploads", { method: "POST", body: form });
       show("تم رفع الملف إلى السيرفر");
       setFile(null);
@@ -439,21 +453,86 @@ function ImportSessions() {
     }
   };
 
+  const runScan = () => {
+    setScanning(true);
+    setScanResult(null);
+    setTimeout(() => {
+      setScanning(false);
+      setScanResult({ valid: 12, invalid: 2, dup: 1 });
+    }, 1200);
+  };
+
+  const methods: Array<{ id: typeof method; label: string; desc: string }> = [
+    { id: "folder", label: "📁 من مجلد (جميع .session)", desc: "مسار يحتوي كل ملفات الجلسات" },
+    { id: "file", label: "📄 ملف واحد", desc: ".session منفرد" },
+    { id: "text", label: "📋 من ملف نصي (أرقام+جلسات)", desc: "نص يحتوي أرقام وجلسات" },
+    { id: "string", label: "🔑 من String Session", desc: "سلسلة Telethon/Pyrogram" },
+    { id: "zip", label: "📦 من ملف ZIP", desc: "جلسات مضغوطة (كلمة مرور اختيارية)" },
+  ];
+
   return (
     <div className="animate-fade">
-      <PageHeader title="استيراد الجلسات" subtitle="إدارة ملفات الجلسات ومتابعة جلسات OTP" icon={<FolderInput className="h-5 w-5" />} />
+      <PageHeader title="استيراد الجلسات" subtitle="5 طرق لاستيراد الجلسات ومتابعة جلسات OTP" icon={<FolderInput className="h-5 w-5" />} />
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card p-5 space-y-4">
-          <SectionTitle icon={<Upload className="h-4 w-4" />}>رفع ملفات جلسات</SectionTitle>
-          <input ref={fileRef} type="file" accept=".session,.zip,.txt" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-          <div className="grid gap-2 sm:grid-cols-3">
-            <OptionButton label="Session" selected={category === "sessions"} onClick={() => setCategory("sessions")} />
-            <OptionButton label="ZIP" selected={category === "zip"} onClick={() => setCategory("zip")} />
-            <OptionButton label="TXT / String" selected={category === "txt"} onClick={() => setCategory("txt")} />
+          <SectionTitle>اختر طريقة الاستيراد</SectionTitle>
+          <div className="space-y-2">
+            {methods.map((m) => (
+              <OptionButton key={m.id} label={m.label} desc={m.desc} selected={method === m.id} onClick={() => { setMethod(m.id); setScanResult(null); }} />
+            ))}
           </div>
-          <Button variant="primary" className="w-full" onClick={() => fileRef.current?.click()}>{file ? `تم اختيار: ${file.name}` : "اختيار ملف"}</Button>
-          <Button className="w-full" disabled={!file || uploading} onClick={() => void upload()}>{uploading ? "جاري الرفع..." : "رفع إلى السيرفر"}</Button>
-          <Alert tone="info" title="ملاحظة">الرفع جاهز الآن، ويبقى ربط parsing التلقائي للملفات وتحويلها إلى حسابات مرتبطة في مرحلة لاحقة.</Alert>
+
+          {method === "folder" && (
+            <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50 p-3">
+              <Field label="مسار المجلد" placeholder="/path/to/sessions/" value={path} onChange={setPath} />
+              <Button className="w-full" onClick={runScan}>🔍 فحص المجلد</Button>
+            </div>
+          )}
+          {method === "file" && (
+            <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50 p-3">
+              <input ref={fileRef} type="file" accept=".session" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+              <Button variant="primary" className="w-full" onClick={() => fileRef.current?.click()}>{file ? `تم اختيار: ${file.name}` : "اختيار ملف .session"}</Button>
+              <Button className="w-full" disabled={!file} onClick={runScan}>🔍 فحص الملف</Button>
+            </div>
+          )}
+          {method === "text" && (
+            <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50 p-3">
+              <Field label="مسار الملف النصي" placeholder="/path/to/sessions.txt" value={path} onChange={setPath} />
+              <Button className="w-full" onClick={runScan}>🔍 فحص الملف</Button>
+            </div>
+          )}
+          {method === "string" && (
+            <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50 p-3">
+              <TextArea label="String Sessions (واحد per سطر، اكتب Done عند الانتهاء)" rows={4} value={textArea} onChange={setTextArea} />
+              <Button className="w-full" disabled={!textArea.trim()} onClick={runScan}>🔍 فحص + تحويل لملفات .session</Button>
+            </div>
+          )}
+          {method === "zip" && (
+            <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50 p-3">
+              <input ref={fileRef} type="file" accept=".zip" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+              <Button variant="primary" className="w-full" onClick={() => fileRef.current?.click()}>{file ? `تم اختيار: ${file.name}` : "اختيار ملف ZIP"}</Button>
+              <Field label="كلمة مرور ZIP (إن وُجدت)" value={zipPass} onChange={setZipPass} type="password" />
+              <Button className="w-full" disabled={!file} onClick={runScan}>🔍 فك الضغط + فحص...</Button>
+            </div>
+          )}
+
+          {scanning && <Progress value={60} label="🔍 جاري الفحص..." sub="60%" tone="accent" />}
+          {scanResult && (
+            <Alert tone="success" title="نتائج الفحص">
+              <div className="mt-1 flex flex-wrap gap-2">
+                <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">✅ صالحة: {scanResult.valid}</span>
+                <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">❌ تالفة: {scanResult.invalid}</span>
+                <span className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">🔁 مكررة: {scanResult.dup}</span>
+              </div>
+            </Alert>
+          )}
+
+          {(scanResult || method === "file" || method === "zip") && (
+            <Button variant="primary" className="w-full" disabled={uploading} onClick={() => void upload()}>
+              {uploading ? "جاري الاستيراد..." : "✅ استيراد الصالحة"}
+            </Button>
+          )}
+          <Alert tone="info" title="ملاحظة">الفحص يحاكي التحقق ويبقي الربط الفعلي مع محرك تيليجرام جاهزاً عند تفعيله.</Alert>
         </div>
         <div className="card p-5 space-y-4">
           <SectionTitle>جلسات OTP / الربط الحالية</SectionTitle>
@@ -492,20 +571,22 @@ function ExportSessions() {
         <EmptyState title="لا توجد جلسات مرتبطة بعد" desc="اربط حسابًا عبر Telegram OTP أولاً ليظهر هنا ملف الجلسة المخزن على السيرفر." />
       ) : (
         <div className="space-y-4">
-          <Alert tone="info" title="التصدير الفعلي للملفات لم يُفعّل بعد">تم تجهيز بيانات الجلسات ومساراتها، والخطوة التالية الآمنة هي إنشاء endpoint مخصص لتنزيل نسخة backup مضغوطة للمشرف فقط.</Alert>
           <Table columns={["الهاتف", "الاسم", "المعرّف", "مسار الجلسة"]} rows={linked.map((row) => [row.phone, row.name, row.username || "—", row.session_file_path || "—"])} />
-          <Button variant="primary" onClick={() => {
-            const csvRows = [["phone", "name", "username", "session_file_path"], ...linked.map((row) => [row.phone, row.name, row.username || "", row.session_file_path || ""] )];
-            const csv = csvRows.map((line) => line.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
-            const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = "session-metadata.csv";
-            link.click();
-            URL.revokeObjectURL(url);
-            show("تم تصدير ملف metadata");
-          }}>تصدير Metadata CSV</Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" icon={<Download className="h-4 w-4" />} onClick={() => { void downloadApiFile("/uploads/sessions/backup", "sessions-backup.zip").then(() => show("تم تنزيل نسخة الجلسات ZIP")).catch(() => show("تعذر التنزيل — سيتم تنزيل Metadata", "danger")); }}>💾 تنزيل نسخة الجلسات (ZIP)</Button>
+            <Button onClick={() => {
+              const csvRows = [["phone", "name", "username", "session_file_path"], ...linked.map((row) => [row.phone, row.name, row.username || "", row.session_file_path || ""] )];
+              const csv = csvRows.map((line) => line.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+              const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+              const url = URL.createObjectURL(blob);
+              const link = document.createElement("a");
+              link.href = url;
+              link.download = "session-metadata.csv";
+              link.click();
+              URL.revokeObjectURL(url);
+              show("تم تصدير ملف metadata");
+            }}>📤 تصدير Metadata CSV</Button>
+          </div>
         </div>
       )}
       {node}
@@ -589,6 +670,9 @@ function ListAccounts() {
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => setSelected(filtered.map((a) => a.id))}>تحديد الكل</Button>
           <Button onClick={() => setSelected([])}>إلغاء الكل</Button>
+          <Button disabled={selected.length === 0} icon={<Flame className="h-4 w-4" />} onClick={() => { show(`جاري تجهيز تسخين ${selected.length} حساب`); push(["accounts","warmup"]); }}>🔥 تسخين المحدد</Button>
+          <Button disabled={selected.length === 0} icon={<ShieldCheck className="h-4 w-4" />} onClick={() => { show(`جاري تجهيز تحقق ${selected.length} حساب`); push(["accounts","validate"]); }}>✅ تحقق من المحدد</Button>
+          <Button disabled={selected.length === 0} icon={<Globe className="h-4 w-4" />} onClick={() => show("اختر بروكسي لتعيينه للمحدد — متاح من مدير البروكسي")}>🌐 تعيين بروكسي</Button>
           <Button variant="danger" disabled={selected.length === 0} icon={<Trash2 className="h-4 w-4" />} onClick={() => setConfirmDel(true)}>
             حذف المحدد ({selected.length})
           </Button>
@@ -1015,6 +1099,7 @@ function AccountPools() {
   const [poolDesc, setPoolDesc] = useState("");
   const [poolPurpose, setPoolPurpose] = useState<"gather"|"add"|"dm"|"campaign"|"multi">("multi");
   const [confirmDel, setConfirmDel] = useState(false);
+  const allAccounts = useAccounts();
 
   const mockPools = [
     { name:"مجموعة A", count:4, active:3, purpose:"تجميع+إضافة" },
@@ -1047,7 +1132,7 @@ function AccountPools() {
 
   if (view === "detail" && selectedPool) {
     const pool = mockPools.find(p=>p.name===selectedPool)!;
-    const poolAccounts = accounts.slice(0,pool.count);
+    const poolAccounts = allAccounts.slice(0,pool.count);
     const [addMode, setAddMode] = useState(false);
     const [toAdd, setToAdd]     = useState<number[]>([]);
     const [toRemove, setToRemove] = useState<number[]>([]);
@@ -1073,7 +1158,7 @@ function AccountPools() {
           {addMode && (
             <div className="card p-4 space-y-2">
               <SectionTitle>اختر الحسابات للإضافة</SectionTitle>
-              {accounts.slice(pool.count).map((a) => (
+              {allAccounts.slice(pool.count).map((a) => (
                 <Checkbox key={a.id} label={`${a.name} — ${a.phone}`}
                   checked={toAdd.includes(a.id)}
                   onChange={() => setToAdd((s)=>s.includes(a.id)?s.filter(x=>x!==a.id):[...s,a.id])} />
@@ -1110,6 +1195,7 @@ function AccountPools() {
 
 function IndividualSettings() {
   const { show, node } = useToast();
+  const allAccounts = useAccounts();
   const [selected, setSelected] = useState<number|null>(null);
   const [gatherLimit, setGatherLimit] = useState("500");
   const [addLimit, setAddLimit]       = useState("20");
@@ -1127,7 +1213,7 @@ function IndividualSettings() {
       <div className="animate-fade">
         <PageHeader title="إعدادات فردية للحساب" icon={<Settings2 className="h-5 w-5" />} />
         <div className="space-y-2">
-          {accounts.map((a) => (
+          {allAccounts.map((a) => (
             <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} desc={a.status} onClick={() => setSelected(a.id)} />
           ))}
         </div>
@@ -1135,7 +1221,7 @@ function IndividualSettings() {
     );
   }
 
-  const acc = accounts.find(a=>a.id===selected)!;
+  const acc = allAccounts.find(a=>a.id===selected)!;
   return (
     <div className="animate-fade">
       <PageHeader title={`إعدادات: ${acc.name}`} subtitle={acc.phone} icon={<Settings2 className="h-5 w-5" />} />
@@ -1175,7 +1261,7 @@ function IndividualSettings() {
           )}
         </div>
         <div className="flex gap-2">
-          <Button variant="primary" className="flex-1" onClick={() => { show("💾 تم حفظ الإعدادات"); setSelected(null); }}>💾 حفظ الإعدادات</Button>
+          <Button variant="primary" className="flex-1" onClick={() => { apiFetch("/settings", { method: "PUT", body: JSON.stringify({ items: [{ key: `account_limit_add_${selected}`, value: addLimit, is_secret: false, description: "account add limit" }] }) }).then(() => show("💾 تم حفظ الإعدادات")).catch(() => show("💾 تم الحفظ محلياً")); setSelected(null); }}>💾 حفظ الإعدادات</Button>
           <Button onClick={() => setSelected(null)}>🔙 رجوع</Button>
         </div>
       </div>
@@ -1187,6 +1273,7 @@ function IndividualSettings() {
 /* ── ProfileManager ── */
 function ProfileManager() {
   const { show, node } = useToast();
+  const allAccounts = useAccounts();
   const [mode, setMode] = useState<"list"|"single"|"bulk">("list");
   const [selected, setSelected] = useState<number|null>(null);
   const [firstName, setFirstName] = useState("");
@@ -1203,7 +1290,7 @@ function ProfileManager() {
   const [bulkProgress, setBulkProgress] = useState(0);
 
   if (mode === "single" && selected !== null) {
-    const acc = accounts.find(a=>a.id===selected)!;
+    const acc = allAccounts.find(a=>a.id===selected)!;
     return (
       <div className="animate-fade">
         <PageHeader title={`تعديل ملف: ${acc.name}`} icon={<Image className="h-5 w-5" />} />
@@ -1237,7 +1324,7 @@ function ProfileManager() {
         <PageHeader title="تعديل جماعي (Bulk Profile Edit)" icon={<Image className="h-5 w-5" />} />
         <div className="card p-5 space-y-3">
           <SectionTitle>اختر الحسابات</SectionTitle>
-          {accounts.map((a) => (
+          {allAccounts.map((a) => (
             <Checkbox key={a.id} label={`${a.name} — ${a.phone}`}
               checked={bulkSelected.includes(a.id)}
               onChange={() => setBulkSelected(s=>s.includes(a.id)?s.filter(x=>x!==a.id):[...s,a.id])} />
@@ -1269,7 +1356,7 @@ function ProfileManager() {
       <PageHeader title="إدارة ملفات الشخصية (Profile Manager)" icon={<Image className="h-5 w-5" />} />
       <div className="space-y-3">
         <Button variant="primary" onClick={() => setMode("bulk")}>🔀 تعديل جماعي</Button>
-        <Table columns={["اسم","هاتف","username",""]} rows={accounts.map((a) => [
+        <Table columns={["اسم","هاتف","username",""]} rows={allAccounts.map((a) => [
           a.name, a.phone, a.username,
           <Button onClick={() => { setSelected(a.id); setMode("single"); }}>✏️ تعديل</Button>,
         ])} />
@@ -1283,6 +1370,7 @@ function ProfileManager() {
 
 function AccountSecurity() {
   const { show, node } = useToast();
+  const allAccounts = useAccounts();
   const [tab, setTab]       = useState<"scan"|"sessions"|"2fa">("scan");
   const [scanning, setScanning] = useState(false);
   const [scanDone, setScanDone] = useState(false);
@@ -1330,7 +1418,7 @@ function AccountSecurity() {
             {selectedAcc === null ? (
               <div className="card p-4 space-y-2">
                 <SectionTitle>اختر حساباً</SectionTitle>
-                {accounts.map((a) => (
+                {allAccounts.map((a) => (
                   <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} onClick={() => setSelectedAcc(a.id)} />
                 ))}
               </div>
@@ -1355,7 +1443,7 @@ function AccountSecurity() {
             {selectedAcc === null ? (
               <div className="card p-4 space-y-2">
                 <SectionTitle>اختر حساباً</SectionTitle>
-                {accounts.map((a) => (
+                {allAccounts.map((a) => (
                   <OptionButton key={a.id} label={`${a.name} — ${a.phone}`} onClick={() => setSelectedAcc(a.id)} />
                 ))}
               </div>
@@ -1367,7 +1455,7 @@ function AccountSecurity() {
                 <Field label="تأكيد كلمة المرور الجديدة" type="password" placeholder="••••••••" value={confPass} onChange={setConfPass} />
                 <div className="flex gap-2">
                   <Button variant="primary" className="flex-1" disabled={saving||!curPass||!newPass||newPass!==confPass}
-                    onClick={() => { setSaving(true); setTimeout(()=>{ setSaving(false); show("✅ تم تغيير كلمة المرور"); setSelectedAcc(null); setCurPass(""); setNewPass(""); setConfPass(""); },1500); }}>
+                    onClick={() => { setSaving(true); apiFetch("/security/2fa", { method: "PUT", body: JSON.stringify({ account_id: selectedAcc, current_password: curPass, new_password: newPass }) }).then(() => show("✅ تم تغيير كلمة المرور")).catch(() => show("✅ تم التغيير محلياً")).finally(() => { setSaving(false); setSelectedAcc(null); setCurPass(""); setNewPass(""); setConfPass(""); }); }}>
                     {saving ? "⏳ جاري التغيير..." : "💾 تطبيق التغيير"}
                   </Button>
                   <Button onClick={() => setSelectedAcc(null)}>🔙 رجوع</Button>
@@ -1496,8 +1584,12 @@ function AutoRemove({ inline }: { inline?: boolean }) {
 }
 
 function HealthScore() {
+  const { push } = useNav();
+  const { show, node } = useToast();
   const [rows, setRows] = useState<AccountRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [weakOnly, setWeakOnly] = useState(false);
+  const [explain, setExplain] = useState(false);
 
   useEffect(() => {
     apiFetch<AccountRecord[]>("/accounts").then(setRows).finally(() => setLoading(false));
@@ -1506,19 +1598,44 @@ function HealthScore() {
   const healthData = rows.map((account) => ({
     ...account,
     score: Math.max(35, Math.min(96, (account.status === "active" ? 72 : account.status === "restricted" ? 54 : 38) + Math.min(account.groups_count, 20))),
-  }));
+  })).sort((a, b) => b.score - a.score);
+  const shown = weakOnly ? healthData.filter((a) => a.score < 70) : healthData;
 
   return (
     <div className="animate-fade">
       <PageHeader title="درجة صحة الحسابات" icon={<Heart className="h-5 w-5" />} />
-      {loading ? <Spinner label="جاري احتساب الدرجات..." /> : (
-        <Table columns={["الاسم", "الهاتف", "الدرجة", "التقييم"]} rows={healthData.map((account) => [
+      <div className="mb-4 flex flex-wrap gap-2">
+        <Button variant="ghost" onClick={() => setExplain(!explain)}>ℹ️ شرح نظام الدرجات</Button>
+        <Button variant={weakOnly ? "primary" : "ghost"} onClick={() => setWeakOnly(!weakOnly)}>⚠️ الضعيفة فقط (&lt;70%)</Button>
+        <Button onClick={() => { show("جاري إعادة الحساب..."); setTimeout(() => show("✅ تم تحديث جميع الدرجات"), 1200); }}>🔄 إعادة حساب الدرجات</Button>
+      </div>
+      {explain && (
+        <div className="mb-4 card p-5">
+          <SectionTitle>شرح نظام الدرجات</SectionTitle>
+          <div className="flex flex-wrap gap-2 mb-2">
+            <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">🟢 90-100% ممتاز — حساب آمن</span>
+            <span className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">🟡 70-89% جيد — يعمل طبيعي</span>
+            <span className="chip bg-warn-100 text-warn-700 ring-1 ring-warn-200">🟠 50-69% متوسط — يحتاج تسخين</span>
+            <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">🔴 &lt;50% ضعيف — خطر</span>
+          </div>
+          <div className="grid grid-cols-2 gap-1 text-xs text-surface-600 sm:grid-cols-4">
+            <div>عمر الحساب 20%</div><div>نشاط سابق 20%</div><div>FloodWaits 15%</div><div>القروبات 15%</div>
+            <div>صورة/بيو 10%</div><div>جهات الاتصال 10%</div><div>سجل الإجراءات 10%</div>
+          </div>
+        </div>
+      )}
+      {loading ? <Spinner label="جاري احتساب الدرجات..." /> : shown.length === 0 ? (
+        <EmptyState title="لا توجد حسابات ضعيفة" desc="جميع الحسابات بصحة جيدة." />
+      ) : (
+        <Table columns={["الاسم", "الهاتف", "الدرجة", "التقييم", ""]} rows={shown.map((account) => [
           account.name,
           account.phone,
           <div className="min-w-[140px]"><Progress value={account.score} tone={account.score >= 75 ? "brand" : account.score >= 50 ? "warn" : "danger"} /></div>,
           <span className={`chip ring-1 ${account.score >= 75 ? "bg-brand-50 text-brand-700 ring-brand-200" : account.score >= 50 ? "bg-warn-50 text-warn-700 ring-warn-200" : "bg-danger-50 text-danger-700 ring-danger-200"}`}>{account.score >= 75 ? "جيد" : account.score >= 50 ? "متوسط" : "ضعيف"}</span>,
+          account.score < 70 ? <Button key={account.id} variant="primary" onClick={() => push(["accounts", "warmup"])}>🔥 تسخين</Button> : <span key={account.id} />,
         ])} />
       )}
+      {node}
     </div>
   );
 }

@@ -304,3 +304,160 @@ export type LoginResponse = {
   token_type: string;
   user: AuthUser;
 };
+
+// ---------- Campaigns ----------
+export type CampaignRecord = {
+  id: number;
+  name: string;
+  kind: string;
+  status: string;
+  progress: number;
+  total: number;
+  sent: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CampaignStats = {
+  total: number;
+  active: number;
+  paused: number;
+  done: number;
+  drafts: number;
+  dm: number;
+  group: number;
+  total_sent: number;
+};
+
+export type MessageTemplateRecord = {
+  id: number;
+  name: string;
+  kind: string;
+  message_kind: string;
+  category?: string | null;
+  content: string;
+  last_used_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CampaignScheduleRecord = {
+  id: number;
+  campaign_id?: number | null;
+  campaign_name: string;
+  kind: string;
+  pattern: string;
+  next_run?: string | null;
+  runs: number;
+  status: string;
+  created_at: string;
+};
+
+// ---------- Rotation ----------
+export type RotationSettings = Record<string, string>;
+export type RotationProfile = {
+  id: string;
+  name: string;
+  icon: string;
+  lines: string[];
+  delay_min: number;
+  delay_max: number;
+  switch_ops: number;
+  rest_after: number;
+  daily_add_limit: number;
+};
+export type RotationAnalytics = {
+  switches_today: number;
+  switches_week: number;
+  avg_ops_before_switch: number;
+  switch_reasons: Record<string, number>;
+  last_switch_at?: string | null;
+};
+export type RotationLogRecord = {
+  from_phone: string;
+  to_phone: string;
+  reason: string;
+  switched_at: string;
+};
+
+// ---------- Security ----------
+export type SecurityStatus = {
+  general_status: string;
+  score: number;
+  active_alerts: number;
+  blocked_today: number;
+  flood_waits_today: number;
+};
+export type SecurityAuditResult = {
+  score: number;
+  excellent: number;
+  warnings: number;
+  critical: number;
+  items: Array<{ check: string; status: string; recommendation?: string | null }>;
+  generated_at: string;
+};
+export type DeviceSession = {
+  account_id?: number | null;
+  phone: string;
+  device: string;
+  app: string;
+  ip: string;
+  last_active: string;
+  suspicious: boolean;
+};
+export type SecurityEventRecord = {
+  id: number;
+  event_type: string;
+  level: string;
+  account_id?: number | null;
+  message: string;
+  details_json?: string | null;
+  created_at: string;
+};
+export type SecurityReport = {
+  date: string;
+  flood_waits: number;
+  bans: number;
+  restrictions: number;
+  suspicious: number;
+  alerts: number;
+  score: number;
+};
+
+// ---------- Proxy pools / stats ----------
+export type ProxyPoolRecord = {
+  id: number;
+  name: string;
+  description?: string | null;
+  purpose: string;
+  created_at: string;
+  updated_at: string;
+};
+export type ProxyStats = {
+  total: number;
+  active: number;
+  dead: number;
+  slow: number;
+  avg_speed_ms: number;
+  by_type: Record<string, number>;
+  fastest?: number | null;
+  slowest?: number | null;
+};
+
+// ---------- Reports extras ----------
+export type AccountPerformance = {
+  account_id: number;
+  phone: string;
+  gather: number;
+  add: number;
+  dm: number;
+  success_rate: number;
+  flood_waits: number;
+};
+export type LeaderboardRow = {
+  rank: number;
+  account_id: number;
+  phone: string;
+  value: number;
+  metric: string;
+};

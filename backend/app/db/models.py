@@ -56,6 +56,26 @@ class UploadCategory(str, Enum):
     backups = "backups"
 
 
+class ProxyPurpose(str, Enum):
+    gather = "gather"
+    add = "add"
+    dm = "dm"
+    campaign = "campaign"
+    multi = "multi"
+
+
+class MessageKind(str, Enum):
+    text = "text"
+    image = "image"
+    video = "video"
+    doc = "doc"
+
+
+class ScheduleStatus(str, Enum):
+    active = "active"
+    paused = "paused"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -76,6 +96,23 @@ class User(Base):
     uploads: Mapped[list[UploadFileRecord]] = relationship(back_populates="uploader")
 
 
+class ProxyPool(Base):
+    __tablename__ = "proxy_pools"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    purpose: Mapped[str] = mapped_column(String(20), default=ProxyPurpose.multi.value)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    proxies: Mapped[list[Proxy]] = relationship(back_populates="pool")
+
+
 class Proxy(Base):
     __tablename__ = "proxies"
 
@@ -87,6 +124,7 @@ class Proxy(Base):
     auth_login: Mapped[str | None] = mapped_column(String(120), nullable=True)
     auth_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pool_id: Mapped[int | None] = mapped_column(ForeignKey("proxy_pools.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -95,6 +133,7 @@ class Proxy(Base):
     )
 
     accounts: Mapped[list[Account]] = relationship(back_populates="proxy")
+    pool: Mapped[ProxyPool | None] = relationship(back_populates="proxies")
 
 
 class Account(Base):
@@ -248,3 +287,58 @@ class UploadFileRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     uploader: Mapped[User | None] = relationship(back_populates="uploads")
+
+
+class MessageTemplate(Base):
+    __tablename__ = "message_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)
+    kind: Mapped[str] = mapped_column(String(20), default=CampaignKind.group.value)
+    message_kind: Mapped[str] = mapped_column(String(20), default=MessageKind.text.value)
+    category: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    content: Mapped[str] = mapped_column(Text)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class CampaignSchedule(Base):
+    __tablename__ = "campaign_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    campaign_id: Mapped[int | None] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=True)
+    campaign_name: Mapped[str] = mapped_column(String(120), index=True)
+    kind: Mapped[str] = mapped_column(String(20), default=CampaignKind.group.value)
+    pattern: Mapped[str] = mapped_column(String(50), default="one_time")
+    next_run: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    runs: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default=ScheduleStatus.active.value)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class RotationLog(Base):
+    __tablename__ = "rotation_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    from_phone: Mapped[str] = mapped_column(String(32))
+    to_phone: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[str] = mapped_column(String(50), default="manual")
+    switched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SecurityEvent(Base):
+    __tablename__ = "security_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    level: Mapped[str] = mapped_column(String(20), default="info")
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    message: Mapped[str] = mapped_column(Text)
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

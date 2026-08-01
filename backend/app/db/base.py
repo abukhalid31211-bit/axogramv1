@@ -1,4 +1,21 @@
-from app.db.models import Account, ActivityLog, AddOperation, AppSetting, BlacklistEntry, Campaign, GatherExport, Proxy, TelegramAuthSession, UploadFileRecord, User
+from app.db.models import (
+    Account,
+    ActivityLog,
+    AddOperation,
+    AppSetting,
+    BlacklistEntry,
+    Campaign,
+    CampaignSchedule,
+    GatherExport,
+    MessageTemplate,
+    Proxy,
+    ProxyPool,
+    RotationLog,
+    SecurityEvent,
+    TelegramAuthSession,
+    UploadFileRecord,
+    User,
+)
 
 __all__ = [
     "Account",
@@ -7,8 +24,13 @@ __all__ = [
     "AppSetting",
     "BlacklistEntry",
     "Campaign",
+    "CampaignSchedule",
     "GatherExport",
+    "MessageTemplate",
     "Proxy",
+    "ProxyPool",
+    "RotationLog",
+    "SecurityEvent",
     "TelegramAuthSession",
     "UploadFileRecord",
     "User",

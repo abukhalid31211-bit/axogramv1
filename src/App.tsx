@@ -6,7 +6,7 @@ import { GatherModule, GatherScreen } from "./screens/Gather";
 import { AddModule, AddScreen } from "./screens/Add";
 import { RotationModule, RotationScreen } from "./screens/Rotation";
 import { ProxyModule, ProxyScreen } from "./screens/Proxy";
-import { SettingsModule } from "./screens/Settings";
+import { SettingsModule, SettingsScreen } from "./screens/Settings";
 import { ReportsModule, ReportsScreen } from "./screens/Reports";
 import { SecurityModule, SecurityScreen } from "./screens/Security";
 import { CampaignsModule, CampaignsScreen } from "./screens/Campaigns";
@@ -57,6 +57,8 @@ function Router() {
       return <CampaignsScreen sub={sub} />;
     case "massdm":
       return <MassDmScreen sub={sub} />;
+    case "settings":
+      return <SettingsScreen sub={sub} />;
   }
 
   return <HomeScreen />;

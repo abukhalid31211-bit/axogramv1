@@ -669,10 +669,12 @@ function AdvancedScrape() {
 function FileCleaner() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const [files, setFiles] = useState<GatherExportRecord[]>(fallbackExports());
   const [selected, setSelected] = useState<number|null>(null);
   const [ops, setOps] = useState({ dedup:true, noUser:false, noPhone:false, bots:true, deleted:true, old30:false, old90:false, keepTop:false, sort:false });
   const [keepCount, setKeepCount] = useState("1000");
   const [cleaning, setCleaning]   = useState(false);
+  useEffect(() => { apiFetch<GatherExportRecord[]>("/gather/exports").then(setFiles).catch(() => undefined); }, []);
   const [done, setDone]           = useState(false);
 
   if (selected === null) {
@@ -680,21 +682,21 @@ function FileCleaner() {
       <div className="animate-fade">
         <PageHeader title="تنقية وتحسين الملفات (File Cleaner)" icon={<Trash2 className="h-5 w-5" />} />
         <div className="space-y-2">
-          {exportedFiles.map((f) => (
-            <OptionButton key={f.id} label={f.name} desc={`${f.members.toLocaleString()} عضو — ${f.date}`} onClick={() => setSelected(f.id)} />
+          {files.map((f) => (
+            <OptionButton key={f.id} label={f.file_name} desc={`${f.member_count.toLocaleString()} عضو — ${new Date(f.created_at).toLocaleDateString("ar")}`} onClick={() => setSelected(f.id)} />
           ))}
         </div>
       </div>
     );
   }
 
-  const file = exportedFiles.find(f=>f.id===selected)!;
+  const file = files.find(f=>f.id===selected)!;
   return (
     <div className="animate-fade">
-      <PageHeader title={`تنقية: ${file.name}`} icon={<Trash2 className="h-5 w-5" />} />
+      <PageHeader title={`تنقية: ${file.file_name}`} icon={<Trash2 className="h-5 w-5" />} />
       <div className="space-y-4">
         <div className="card p-4">
-          <Alert tone="info" title={`إحصائيات الملف الحالي: ${file.members.toLocaleString()} عضو`} />
+          <Alert tone="info" title={`إحصائيات الملف الحالي: ${file.member_count.toLocaleString()} عضو`} />
         </div>
         <div className="card p-5 space-y-2">
           <SectionTitle>عمليات التنقية</SectionTitle>
@@ -716,7 +718,7 @@ function FileCleaner() {
         {done && (
           <div className="space-y-3">
             <Alert tone="success" title="تمت التنقية">
-              <div className="mt-1 text-xs">قبل: {file.members.toLocaleString()} عضو ── بعد: {Math.floor(file.members*0.8).toLocaleString()} عضو | تم حذف: {Math.floor(file.members*0.2).toLocaleString()}</div>
+              <div className="mt-1 text-xs">قبل: {file.member_count.toLocaleString()} عضو ── بعد: {Math.floor(file.member_count*0.8).toLocaleString()} عضو | تم حذف: {Math.floor(file.member_count*0.2).toLocaleString()}</div>
             </Alert>
             <div className="flex gap-2">
               <Button variant="primary" className="flex-1" onClick={() => show("تم حفظ الملف المنقى")}>💾 حفظ ملف جديد</Button>

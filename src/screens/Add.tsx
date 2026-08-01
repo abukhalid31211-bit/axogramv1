@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   UserPlus, FileText, PenLine, RefreshCw, BarChart3,
   Play, Pause, Square, Plus, Minus, Bell, ListChecks,
@@ -90,6 +90,16 @@ function SRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function useAccounts() {
+  const [rows, setRows] = useState<typeof accounts>(accounts);
+  useEffect(() => {
+    apiFetch<{ id: number; name: string; phone: string; status: string }[]>("/accounts").then((r) => {
+      setRows(r.map((a) => ({ id: a.id, name: a.name, phone: a.phone, username: "@" + a.name, status: a.status as any, proxy: "", lastUsed: "", age: "", groups: 0 })));
+    }).catch(() => undefined);
+  }, []);
+  return rows;
+}
+
 function useQueueHealth() {
   const [queueEnabled, setQueueEnabled] = useState<boolean | null>(null);
   useEffect(() => {
@@ -124,6 +134,14 @@ function AddRunning({ summary, onBack }: { summary: Record<string,string>; onBac
   const [paused, setPaused]     = useState(false);
   const [done, setDone]         = useState(false);
   const [showMidReport, setShowMidReport] = useState(false);
+  const [resumeOpts, setResumeOpts] = useState(false);
+  const [editOpts, setEditOpts] = useState(false);
+  const [minutes, setMinutes]   = useState("15");
+  const [editDelay, setEditDelay] = useState("90");
+  const [editDaily, setEditDaily] = useState("20");
+  const [editSwitch, setEditSwitch] = useState("5");
+  const [showFlood, setShowFlood] = useState(false);
+  const [showBan, setShowBan]     = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -158,12 +176,13 @@ function AddRunning({ summary, onBack }: { summary: Record<string,string>; onBac
           </Alert>
         )}
         <div className="flex flex-wrap gap-2">
-          {running && !paused && <Button variant="warn" icon={<Pause className="h-4 w-4" />} onClick={() => setPaused(true)}>⏸ إيقاف مؤقت</Button>}
-          {running && paused  && <Button variant="primary" icon={<Play className="h-4 w-4" />} onClick={() => setPaused(false)}>▶️ استئناف</Button>}
-          {running && <Button icon={<BarChart3 className="h-4 w-4" />} onClick={() => setShowMidReport(!showMidReport)}>📊 تقرير</Button>}
-          {running && <Button icon={<Plus className="h-4 w-4" />} onClick={() => show("+30% تأخير")}>+30%</Button>}
-          {running && <Button icon={<Minus className="h-4 w-4" />} onClick={() => show("-30% تأخير")}>-30%</Button>}
-          {running && <Button variant="danger" icon={<Square className="h-4 w-4" />} onClick={() => { setRunning(false); setDone(true); setProgress(100); }}>⏹ إيقاف وحفظ</Button>}
+          {running && !paused && <Button variant="warn" icon={<Pause className="h-4 w-4" />} onClick={() => { setPaused(true); setResumeOpts(true); }}>⏸ إيقاف مؤقت</Button>}
+          {running && !paused && <Button icon={<BarChart3 className="h-4 w-4" />} onClick={() => setShowMidReport(!showMidReport)}>📊 تقرير</Button>}
+          {running && !paused && <Button icon={<Plus className="h-4 w-4" />} onClick={() => show("+30% تأخير")}>+30%</Button>}
+          {running && !paused && <Button icon={<Minus className="h-4 w-4" />} onClick={() => show("-30% تأخير")}>-30%</Button>}
+          {running && !paused && <Button variant="danger" icon={<Square className="h-4 w-4" />} onClick={() => { setRunning(false); setDone(true); setProgress(100); }}>⏹ إيقاف وحفظ</Button>}
+          {running && <Button onClick={() => { setShowFlood(!showFlood); setShowBan(false); }}>⚡ محاكاة FloodWait</Button>}
+          {running && <Button onClick={() => { setShowBan(!showBan); setShowFlood(false); }}>⛔ محاكاة حظر</Button>}
           {done && (
             <>
               <Button onClick={() => show("تم تصدير التقرير")}>📤 تصدير</Button>
@@ -173,6 +192,65 @@ function AddRunning({ summary, onBack }: { summary: Record<string,string>; onBac
             </>
           )}
         </div>
+
+        {running && paused && (
+          <div className="rounded-xl border border-surface-200 bg-surface-50 p-4 space-y-3">
+            <Alert tone="info" title="⏸️ متوقف مؤقتاً | حُفظت نقطة التقدم" />
+            {!resumeOpts && (
+              <Button variant="primary" icon={<Play className="h-4 w-4" />} onClick={() => setPaused(false)}>▶️ استئناف الآن</Button>
+            )}
+            {resumeOpts && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="primary" icon={<Play className="h-4 w-4" />} onClick={() => setPaused(false)}>▶️ استئناف الآن</Button>
+                  <Button variant="ghost" onClick={() => { setMinutes("15"); show(`سأستأنف بعد ${minutes} دقيقة`); setPaused(false); }}>⏱️ استئناف بعد فترة</Button>
+                  <Button variant="ghost" onClick={() => setEditOpts(!editOpts)}>✏️ تعديل إعدادات ثم استئناف</Button>
+                </div>
+                {!editOpts && (
+                  <Field label="الاستئناف بعد (دقيقة)" value={minutes} onChange={setMinutes} />
+                )}
+                {editOpts && (
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <InlineEdit label="⏱️ التأخير (ث)" value={editDelay} onSave={setEditDelay} />
+                    <InlineEdit label="📊 الحد اليومي" value={editDaily} onSave={setEditDaily} />
+                    <InlineEdit label="🔢 حد الإضافة/تبديل" value={editSwitch} onSave={setEditSwitch} />
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Button variant="primary" onClick={() => { show("تم تعديل الإعدادات والاستئناف"); setPaused(false); }}>✅ تعديل والاستئناف</Button>
+                  <Button variant="danger" onClick={() => { setRunning(false); setDone(true); setProgress(100); }}>⏹️ إنهاء + حفظ التقدم</Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {running && showFlood && (
+          <div className="rounded-xl border border-warn-200 bg-warn-50 p-4 space-y-2">
+            <Alert tone="warn" title="⚠️ FloodWait تم اكتشافه">
+              <div className="mt-1 space-y-1 text-xs">
+                <div>✅ تبديل تلقائي للحساب التالي</div>
+                <div>✅ زيادة التأخير 30% احترازياً</div>
+              </div>
+            </Alert>
+            <div className="flex gap-2">
+              <Button variant="primary" onClick={() => setShowFlood(false)}>OK — متابعة</Button>
+              <Button variant="warn" onClick={() => { setPaused(true); setResumeOpts(true); setShowFlood(false); }}>P — إيقاف مؤقت</Button>
+              <Button variant="danger" onClick={() => { setRunning(false); setDone(true); setProgress(100); setShowFlood(false); }}>X — إيقاف</Button>
+            </div>
+          </div>
+        )}
+        {running && showBan && (
+          <div className="rounded-xl border border-danger-200 bg-danger-50 p-4 space-y-2">
+            <Alert tone="danger" title="⛔ حظر حساب">
+              <div className="mt-1 space-y-1 text-xs">
+                <div>✅ إزالة من التدوير + تبديل</div>
+                <div>🔔 إشعار بالحظر</div>
+              </div>
+            </Alert>
+            <Button variant="primary" onClick={() => setShowBan(false)}>OK — متابعة</Button>
+          </div>
+        )}
         {showMidReport && running && (
           <div className="border-t border-surface-100 pt-3 space-y-2">
             <SectionTitle>📊 تقرير مفصل للحظة</SectionTitle>
@@ -223,10 +301,29 @@ function AddFromCsv() {
   const [running, setRunning] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [result, setResult] = useState<AddResult | null>(null);
+  const csvRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => setExportsRows(fallbackExports()));
   }, []);
+
+  const uploadCsv = async (f: File) => {
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", f);
+      form.append("category", "csv");
+      const up = await apiFetch<{ id: number }>("/uploads", { method: "POST", body: form });
+      setFile(up.id);
+      show("تم رفع الملف إلى السيرفر واختياره");
+      setExportsRows(await apiFetch<GatherExportRecord[]>("/gather/exports"));
+    } catch (err) {
+      show(err instanceof Error ? err.message : "تعذر رفع الملف", "danger");
+    } finally {
+      setUploading(false);
+    }
+  };
 
   useEffect(() => {
     if (!jobId) return;
@@ -295,7 +392,8 @@ function AddFromCsv() {
               {exportsRows.length === 0 && fallbackExports().map((f) => (
                 <OptionButton key={f.id} label={f.file_name} desc={`${f.member_count.toLocaleString()} عضو — ${new Date(f.created_at).toLocaleDateString("ar-SA")}`} selected={file===f.id} onClick={() => setFile(f.id)} />
               ))}
-              <OptionButton label="📁 تصفح مسار آخر" desc="ملف CSV مخصص" onClick={() => show("ربط رفع ملفات CSV المخصصة سيُفعّل من الخلفية لاحقاً")} />
+              <input ref={csvRef} type="file" accept=".csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadCsv(f); e.target.value = ""; }} />
+              <OptionButton label={uploading ? "⏳ جاري الرفع..." : "📁 تصفح مسار آخر"} desc="ملف CSV مخصص" onClick={() => csvRef.current?.click()} />
             </div>
             {selectedFile && (
               <Alert tone="info" title="🔍 تحليل الملف...">
@@ -341,14 +439,7 @@ function AddFromCsv() {
                 selected={accs==="smart"}    onClick={() => setAccs("smart")} />
             </div>
             {accs==="smart" && <Alert tone="info" title="🧠 يختار تلقائياً: الأعضاء في المجموعة + الأعلى صحة + الأقل استخداماً + الأقدم عمراً" />}
-            {accs==="selected" && (
-              <div className="space-y-2">
-                {accounts.map((a) => (
-                  <Checkbox key={a.id} label={`${a.name} — ${a.phone} | صحة: 87% | اليوم: 15/20`} checked={false} onChange={()=>{}} />
-                ))}
-                <Alert tone="info" title="⚠️ تغطية: 3/4 قروبات مشترك فيها" />
-              </div>
-            )}
+            {accs==="selected" && <SelectedAccounts />}
 
             <SectionTitle>طريقة التوزيع</SectionTitle>
             <div className="grid grid-cols-2 gap-2">
@@ -573,6 +664,20 @@ function AddManual() {
 }
 
 /* ── SmartAdd ── */
+function SelectedAccounts() {
+  const allAccounts = useAccounts();
+  const [sel, setSel] = useState<number[]>([]);
+  const toggle = (id:number) => setSel(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
+  return (
+    <div className="space-y-2">
+      {allAccounts.map((a) => (
+        <Checkbox key={a.id} label={`${a.name} — ${a.phone}`} checked={sel.includes(a.id)} onChange={() => toggle(a.id)} />
+      ))}
+      <Alert tone="info" title={`تم اختيار: ${sel.length} حساب`} />
+    </div>
+  );
+}
+
 function SmartAdd() {
   const { push } = useNav();
   const { show, node } = useToast();
@@ -790,9 +895,9 @@ function ResumeOp() {
             </div>
           </Alert>
           <div className="grid gap-2">
-            <Button variant="primary" className="w-full" onClick={() => push(["add","csv"])}>▶️ تكرار نفس المسار</Button>
-            <Button className="w-full" onClick={() => push(["add","manual"])}>✏️ فتح المسار اليدوي</Button>
-            <Button variant="danger" className="w-full" onClick={() => setConfirmDel(true)}>🗑️ حذف هذه البطاقة محلياً</Button>
+            <Button variant="primary" className="w-full" onClick={() => push(["add","csv"])}>▶️ استئناف بنفس الإعدادات</Button>
+            <Button className="w-full" onClick={() => push(["add","csv"])}>✏️ استئناف بإعدادات معدّلة</Button>
+            <Button variant="danger" className="w-full" onClick={() => setConfirmDel(true)}>🗑️ حذف نقطة الحفظ</Button>
             <Button onClick={() => setSelected(null)}>🔙 رجوع</Button>
           </div>
         </div>
@@ -833,6 +938,7 @@ function ResumeOp() {
 function Blacklist() {
   const { show, node } = useToast();
   const [rows, setRows] = useState<BlacklistEntryRecord[]>([]);
+  const importRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState("");
   const [newUser, setNewUser] = useState("");
   const [newReason, setNewReason] = useState("");
@@ -861,8 +967,27 @@ function Blacklist() {
         <div className="flex flex-wrap gap-2">
           <SearchInput value={search} onChange={setSearch} placeholder="🔍 بحث" />
           <Button onClick={() => setAdding(!adding)}>➕ إضافة يدوياً</Button>
-          <Button onClick={() => show("استيراد CSV للقائمة السوداء سيُفعّل لاحقاً")}>📥 استيراد قائمة</Button>
-          <Button onClick={() => show("تم تصدير CSV")}>📤 تصدير CSV</Button>
+          <input ref={importRef} type="file" accept=".csv,.txt" className="hidden" onChange={async (e) => {
+            const f = e.target.files?.[0]; if (!f) return;
+            const text = await f.text();
+            const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+            let added = 0;
+            for (const line of lines) {
+              const first = line.split(/[,,;\t]/)[0];
+              if (!first) continue;
+              await apiFetch("/add/blacklist", { method: "POST", body: JSON.stringify({ user_value: first, reason: "استيراد" }) }).then(() => added++).catch(() => undefined);
+            }
+            show(`تم استيراد ${added} مدخل`);
+            e.target.value = "";
+            await load();
+          }} />
+          <Button onClick={() => importRef.current?.click()}>📥 استيراد قائمة</Button>
+          <Button onClick={() => {
+            const csv = rows.map((b) => `${b.user_value},${b.reason || ""}`).join("\n");
+            const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+            const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "blacklist.csv"; a.click(); URL.revokeObjectURL(url);
+            show("تم تصدير CSV");
+          }}>📤 تصدير CSV</Button>
           <Button variant="danger" onClick={() => setConfirmClear(true)}>🗑️ مسح الكل</Button>
         </div>
         {adding && (
