@@ -5,8 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "build:web": "tsc -b && vite build",
+    "preview": "vite preview",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
   },
   "dependencies": {
     "lucide-react": "^0.453.0",

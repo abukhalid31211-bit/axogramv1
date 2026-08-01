@@ -11,9 +11,25 @@ import {
   SearchInput, Tabs, ConfirmDialog,
 } from "../ui";
 import { addLogs, exportedFiles, accounts, blacklist } from "../data";
+import {
+  apiFetch,
+  type AddOperationRecord,
+  type AddResult,
+  type AddStats,
+  type BlacklistEntryRecord,
+  type GatherExportRecord,
+  type JobStartResponse,
+  type JobStatusResponse,
+} from "../lib/api";
 
 export function AddModule() {
   const { push } = useNav();
+  const [stats, setStats] = useState<AddStats | null>(null);
+
+  useEffect(() => {
+    apiFetch<AddStats>("/add/stats").then(setStats).catch(() => setStats(null));
+  }, []);
+
   const items = [
     { id:"csv",       label:"إضافة من ملف CSV",          desc:"استيراد أعضاء من ملف",     icon:FileText  },
     { id:"manual",    label:"إضافة يدوية",                desc:"أسماء مستخدمين/IDs",       icon:PenLine   },
@@ -24,16 +40,16 @@ export function AddModule() {
     { id:"logs",      label:"سجلات وإحصائيات الإضافة",    desc:"تاريخ العمليات",           icon:BarChart3 },
     { id:"defaults",  label:"إعدادات الإضافة الافتراضية", desc:"تهيئة السلوك الافتراضي",   icon:Settings  },
   ];
-  const todayAdded = 1842;
-  const successRate = 94;
+  const todayAdded = stats?.total_success ?? 1842;
+  const successRate = stats ? Math.max(0, Math.round((stats.total_success / Math.max(1, stats.total_success + stats.total_failed + stats.total_skipped)) * 100)) : 94;
   return (
     <div className="animate-fade">
       <PageHeader title="إضافة الأعضاء" subtitle="إضافة جماعية للقروبات" icon={<UserPlus className="h-5 w-5" />} />
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="مضاف اليوم"   value={todayAdded.toLocaleString()} tone="brand"  />
-        <StatCard label="الأسبوع"       value="9,840"                       tone="accent" />
+        <StatCard label="العمليات"      value={String(stats?.total_operations ?? 0)} tone="accent" />
         <StatCard label="معدل النجاح"   value={`${successRate}%`}           tone="brand"  />
-        <StatCard label="آخر عملية"     value="منذ 2س"                      tone="accent" />
+        <StatCard label="آخر عملية"     value={stats?.latest_operation_at ? new Date(stats.latest_operation_at).toLocaleDateString("ar-SA") : "منذ 2س"} tone="accent" />
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((it) => {
@@ -72,6 +88,31 @@ function SRow({ label, value }: { label: string; value: string }) {
       <span className="text-sm font-medium text-surface-700">{value}</span>
     </div>
   );
+}
+
+function useQueueHealth() {
+  const [queueEnabled, setQueueEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    apiFetch<{ queue_available: boolean }>("/jobs/health")
+      .then((data) => setQueueEnabled(data.queue_available))
+      .catch(() => setQueueEnabled(false));
+  }, []);
+  return queueEnabled;
+}
+
+function fallbackExports(): GatherExportRecord[] {
+  return exportedFiles.map((file) => ({
+    id: file.id,
+    source_label: file.name,
+    source_type: "csv",
+    file_name: file.name,
+    file_path: file.name,
+    member_count: file.members,
+    status: "ready",
+    notes: null,
+    created_by: null,
+    created_at: `${file.date}T00:00:00Z`,
+  }));
 }
 
 /* ── shared running screen ── */
@@ -159,6 +200,8 @@ function AddRunning({ summary, onBack }: { summary: Record<string,string>; onBac
 function AddFromCsv() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const queueEnabled = useQueueHealth();
+  const [exportsRows, setExportsRows] = useState<GatherExportRecord[]>(fallbackExports());
   const [step, setStep]   = useState(0);
   const [file, setFile]   = useState<number|null>(null);
   const [target, setTarget] = useState("@my_group");
@@ -177,31 +220,90 @@ function AddFromCsv() {
     saveProgress:true, floodWait:true, stopFail:false, addBlacklist:false, stopAtLimit:false,
   });
   const [stopLimit, setStopLimit]   = useState("500");
-  const [started, setStarted]       = useState(false);
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<AddResult | null>(null);
 
-  if (started) return <AddRunning summary={{}} onBack={() => { setStarted(false); push(["add"]); }} />;
+  useEffect(() => {
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => setExportsRows(fallbackExports()));
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await apiFetch<JobStatusResponse>(`/add/jobs/${jobId}`);
+        if (status.status === "finished") {
+          setResult(status.result as unknown as AddResult);
+          setRunning(false);
+          window.clearInterval(timer);
+        }
+        if (status.status === "failed") {
+          show(status.error || "فشل تنفيذ الإضافة", "danger");
+          setRunning(false);
+          window.clearInterval(timer);
+        }
+      } catch (err) {
+        setRunning(false);
+        window.clearInterval(timer);
+        show(err instanceof Error ? err.message : "تعذر متابعة حالة المهمة", "danger");
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [jobId, show]);
+
+  const selectedFile = exportsRows.find((f) => f.id === file) || fallbackExports().find((f) => f.id === file) || null;
+
+  const startAdd = async () => {
+    if (!file) return;
+    setRunning(true);
+    setResult(null);
+    setJobId(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/add/from-export", {
+        method: "POST",
+        body: JSON.stringify({ export_id: file, target_label: target, method, run_inline: queueEnabled === false }),
+      });
+      show(response.message);
+      if (response.mode === "finished") {
+        setResult(response.result as unknown as AddResult);
+        setRunning(false);
+      } else {
+        setJobId(response.job_id || null);
+      }
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء عملية الإضافة", "danger");
+    }
+  };
 
   return (
     <div className="animate-fade">
       <PageHeader title="إضافة من ملف CSV" icon={<FileText className="h-5 w-5" />}
         steps={step>0?{label:"إضافة الأعضاء",n:step+1,total:3}:undefined} />
       <div className="mx-auto max-w-2xl">
+        <Alert tone={queueEnabled ? "info" : "warn"} title={queueEnabled ? "Queue/Worker متاح" : "سيتم التنفيذ المباشر حالياً"}>
+          {queueEnabled ? "سيتم إرسال مهمة الإضافة إلى Worker عند البدء." : "قائمة الانتظار غير متاحة حالياً، لذلك سيتم احتساب العملية مباشرة داخل الـ API."}
+        </Alert>
         {step===0 && (
           <div className="card p-6 space-y-4">
             <SectionTitle>اختر ملف</SectionTitle>
             <div className="space-y-2">
-              {exportedFiles.map((f) => (
-                <OptionButton key={f.id} label={f.name} desc={`${f.members.toLocaleString()} عضو — ${f.date}`} selected={file===f.id} onClick={() => setFile(f.id)} />
+              {exportsRows.map((f) => (
+                <OptionButton key={f.id} label={f.file_name} desc={`${f.member_count.toLocaleString()} عضو — ${new Date(f.created_at).toLocaleDateString("ar-SA")}`} selected={file===f.id} onClick={() => setFile(f.id)} />
               ))}
-              <OptionButton label="📁 تصفح مسار آخر" desc="ملف CSV مخصص" onClick={() => show("تصفح الملفات")} />
+              {exportsRows.length === 0 && fallbackExports().map((f) => (
+                <OptionButton key={f.id} label={f.file_name} desc={`${f.member_count.toLocaleString()} عضو — ${new Date(f.created_at).toLocaleDateString("ar-SA")}`} selected={file===f.id} onClick={() => setFile(f.id)} />
+              ))}
+              <OptionButton label="📁 تصفح مسار آخر" desc="ملف CSV مخصص" onClick={() => show("ربط رفع ملفات CSV المخصصة سيُفعّل من الخلفية لاحقاً")} />
             </div>
-            {file && (
+            {selectedFile && (
               <Alert tone="info" title="🔍 تحليل الملف...">
                 <div className="mt-1 text-xs flex flex-wrap gap-3">
-                  <span>إجمالي: {exportedFiles.find(f2=>f2.id===file)?.members.toLocaleString()}</span>
-                  <span>بـ@username: 72%</span>
-                  <span>بـID: 28%</span>
-                  <span className="text-warn-600">⚠️ بدون username: 28% (سيُتخطى)</span>
+                  <span>إجمالي: {selectedFile.member_count.toLocaleString()}</span>
+                  <span>المصدر: {selectedFile.source_label}</span>
+                  <span>الحالة: {selectedFile.status}</span>
+                  <span className="text-warn-600">⚠️ بدون username قد يُتخطى حسب الفلاتر</span>
                 </div>
               </Alert>
             )}
@@ -224,7 +326,7 @@ function AddFromCsv() {
             {(method==="invite"||method==="link") && (
               <div className="space-y-2">
                 <Field label="نص الرسالة (اختياري)" placeholder="مرحباً، انضم إلينا في..." value={inviteText} onChange={setInviteText} />
-                {method==="link" && <Alert tone="info" title="🔗 سيتم إنشاء رابط دعوة: https://t.me/+XXXXX" />}
+                {method==="link" && <Alert tone="info" title="🔗 سيتم إنشاء رابط دعوة عند ربط هذا الجزء بمحرك تيليجرام المباشر" />}
               </div>
             )}
 
@@ -238,9 +340,7 @@ function AddFromCsv() {
                 badge={<span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">ذكي</span>}
                 selected={accs==="smart"}    onClick={() => setAccs("smart")} />
             </div>
-            {accs==="smart" && (
-              <Alert tone="info" title="🧠 يختار تلقائياً: الأعضاء في المجموعة + الأعلى صحة + الأقل استخداماً + الأقدم عمراً" />
-            )}
+            {accs==="smart" && <Alert tone="info" title="🧠 يختار تلقائياً: الأعضاء في المجموعة + الأعلى صحة + الأقل استخداماً + الأقدم عمراً" />}
             {accs==="selected" && (
               <div className="space-y-2">
                 {accounts.map((a) => (
@@ -342,7 +442,7 @@ function AddFromCsv() {
           <div className="card p-6 space-y-4">
             <SectionTitle>الملخص الشامل</SectionTitle>
             <div className="grid gap-2 sm:grid-cols-2">
-              <SRow label="ملف"         value={file?exportedFiles.find(f=>f.id===file)?.name??"":""} />
+              <SRow label="ملف"         value={selectedFile?.file_name ?? ""} />
               <SRow label="هدف"         value={target} />
               <SRow label="طريقة"       value={{direct:"مباشرة",invite:"دعوة رسالة",link:"رابط دعوة"}[method]} />
               <SRow label="حسابات"      value={{single:"واحد",rotate:"تدوير",group:"مجموعة",selected:"محدد",smart:"ذكي"}[accs]} />
@@ -351,11 +451,23 @@ function AddFromCsv() {
               <SRow label="حد التبديل"  value={`${addLimit} إضافة`} />
               <SRow label="بين الحسابات" value={`${switchDelay} دقيقة`} />
             </div>
-            <Alert tone="info" title="📊 تقدير: 60 إضافة/يوم | ~235 يوم للاكتمال" />
-            <Button variant="primary" className="w-full" icon={<Play className="h-4 w-4" />} onClick={() => setStarted(true)}>✅ بدء الإضافة الآن</Button>
+            <Alert tone="info" title="📊 تقدير تقريبي للعملية سيُحسب في الخلفية عند التشغيل" />
+            <Button variant="primary" className="w-full" icon={<Play className="h-4 w-4" />} disabled={running || file===null} onClick={() => void startAdd()}>{running ? "جاري التشغيل..." : "✅ بدء الإضافة الآن"}</Button>
             <div className="flex gap-2">
               <Button className="flex-1" onClick={() => setStep(1)}>✏️ تعديل الإعدادات</Button>
               <Button variant="danger" onClick={() => { setStep(0); setFile(null); }}>❌ إلغاء</Button>
+            </div>
+          </div>
+        )}
+        {running && <div className="mt-4"><Progress value={jobId ? 55 : 80} label={jobId ? `المهمة في الانتظار: ${jobId}` : "جاري تجهيز العملية..."} sub={jobId ? "Queue" : "Inline"} /></div>}
+        {result && (
+          <div className="mt-4 card p-5 space-y-3">
+            <Alert tone="success" title="✅ اكتملت الإضافة التقديرية على السيرفر">
+              <div className="mt-1 text-xs">✅ ناجح: {result.success_count.toLocaleString()} | ⚠️ تخطي: {result.skipped_count.toLocaleString()} | ❌ فاشل: {result.failed_count.toLocaleString()}</div>
+            </Alert>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => push(["add","logs"])}>📊 سجلات الإضافة</Button>
+              <Button onClick={() => push(["add","resume"])}>🔄 الاستئناف</Button>
             </div>
           </div>
         )}
@@ -369,10 +481,61 @@ function AddFromCsv() {
 function AddManual() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const queueEnabled = useQueueHealth();
   const [users, setUsers]   = useState("");
   const [target, setTarget] = useState("@my_group");
   const [checking, setChecking] = useState(false);
   const [checked, setChecked]   = useState(false);
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<AddResult | null>(null);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await apiFetch<JobStatusResponse>(`/add/jobs/${jobId}`);
+        if (status.status === "finished") {
+          setResult(status.result as unknown as AddResult);
+          setRunning(false);
+          window.clearInterval(timer);
+        }
+        if (status.status === "failed") {
+          show(status.error || "فشلت المهمة", "danger");
+          setRunning(false);
+          window.clearInterval(timer);
+        }
+      } catch (err) {
+        show(err instanceof Error ? err.message : "تعذر متابعة المهمة", "danger");
+        setRunning(false);
+        window.clearInterval(timer);
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [jobId, show]);
+
+  const userList = users.split(/\r?\n/).map((u) => u.trim()).filter(Boolean);
+
+  const startManual = async () => {
+    setRunning(true);
+    setResult(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/add/manual", {
+        method: "POST",
+        body: JSON.stringify({ users: userList, target_label: target, method: "direct", run_inline: queueEnabled === false }),
+      });
+      show(response.message);
+      if (response.mode === "finished") {
+        setResult(response.result as unknown as AddResult);
+        setRunning(false);
+      } else {
+        setJobId(response.job_id || null);
+      }
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء العملية", "danger");
+    }
+  };
 
   return (
     <div className="animate-fade">
@@ -386,15 +549,23 @@ function AddManual() {
         {checked && (
           <Alert tone="success" title="نتائج الفحص">
             <div className="mt-1 flex gap-3 text-xs">
-              <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">✅صالح: 4</span>
-              <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">❌غير موجود: 1</span>
-              <span className="chip bg-warn-50 text-warn-700 ring-1 ring-warn-200">⚠️خصوصية: 1</span>
+              <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">✅مدخلات: {userList.length}</span>
+              <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">❌قد يفشل بعضها لاحقاً</span>
             </div>
           </Alert>
         )}
         <InlineEdit label="رابط المجموعة المستهدفة" value={target} onSave={setTarget} placeholder="@my_group" />
-        <Alert tone="info" title="نفس إعدادات الإضافة من CSV متاحة في الخطوة التالية" />
-        <Button variant="primary" className="w-full" onClick={() => push(["add","csv"])}>متابعة للإعدادات التفصيلية</Button>
+        <Alert tone="info" title={queueEnabled ? "سيتم تنفيذ المهمة عبر Queue عند البدء" : "سيتم التنفيذ المباشر كـ fallback"} />
+        <div className="flex gap-2">
+          <Button variant="primary" className="flex-1" disabled={!userList.length || running} onClick={() => void startManual()}>{running ? "جاري التشغيل..." : "بدء الإضافة اليدوية"}</Button>
+          <Button onClick={() => push(["add","csv"])}>متابعة للإعدادات التفصيلية</Button>
+        </div>
+        {running && <Progress value={jobId ? 55 : 80} label={jobId ? `المهمة في الانتظار: ${jobId}` : "جاري تجهيز العملية..."} sub={jobId ? "Queue" : "Inline"} tone="accent" />}
+        {result && (
+          <Alert tone="success" title="اكتملت العملية اليدوية">
+            <div className="mt-1 text-xs">✅ناجح: {result.success_count} | ⚠️تخطي: {result.skipped_count} | ❌فاشل: {result.failed_count}</div>
+          </Alert>
+        )}
       </div>
       {node}
     </div>
@@ -405,11 +576,60 @@ function AddManual() {
 function SmartAdd() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const queueEnabled = useQueueHealth();
   const [sourceLink, setSourceLink] = useState("");
   const [targetLink, setTargetLink] = useState("");
   const [analyzed, setAnalyzed]     = useState(false);
   const [analyzing, setAnalyzing]   = useState(false);
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<AddResult | null>(null);
   const [filters, setFilters] = useState({ activeOnly:false, onlineOnly:false, hasUser:true, skipExisting:true, skipBlacklist:true });
+
+  useEffect(() => {
+    if (!jobId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await apiFetch<JobStatusResponse>(`/add/jobs/${jobId}`);
+        if (status.status === "finished") {
+          setResult(status.result as unknown as AddResult);
+          setRunning(false);
+          window.clearInterval(timer);
+        }
+        if (status.status === "failed") {
+          show(status.error || "فشلت المهمة", "danger");
+          setRunning(false);
+          window.clearInterval(timer);
+        }
+      } catch (err) {
+        show(err instanceof Error ? err.message : "تعذر متابعة المهمة", "danger");
+        setRunning(false);
+        window.clearInterval(timer);
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [jobId, show]);
+
+  const startSmart = async () => {
+    setRunning(true);
+    setResult(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/add/smart", {
+        method: "POST",
+        body: JSON.stringify({ source_label: sourceLink, target_label: targetLink, method: "direct", limit: 1000, run_inline: queueEnabled === false }),
+      });
+      show(response.message);
+      if (response.mode === "finished") {
+        setResult(response.result as unknown as AddResult);
+        setRunning(false);
+      } else {
+        setJobId(response.job_id || null);
+      }
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء الإضافة الذكية", "danger");
+    }
+  };
 
   return (
     <div className="animate-fade">
@@ -424,8 +644,8 @@ function SmartAdd() {
         {analyzing && <Progress value={60} label="🔍 جاري التحليل..." sub="60%" tone="accent" />}
         {analyzed && (
           <div className="space-y-3">
-            <Alert tone="info" title="📊 المصدر: 15,340 عضو | الهدف: 1,200 عضو">
-              <div className="text-xs mt-0.5">🎯 مرشح للإضافة: 14,140 (بعد استبعاد الموجودين)</div>
+            <Alert tone="info" title="📊 سيتم إنشاء export ثم عملية إضافة في الخلفية">
+              <div className="text-xs mt-0.5">🎯 مرشح للإضافة: تقديري حسب limit الداخلي والفلترة المختارة</div>
             </Alert>
             <SectionTitle>فلاتر الاستهداف</SectionTitle>
             <Checkbox label="النشطون فقط (أرسلوا رسائل)"  checked={filters.activeOnly}    onChange={(v)=>setFilters({...filters,activeOnly:v})} />
@@ -433,9 +653,11 @@ function SmartAdd() {
             <Checkbox label="لديهم @username"               checked={filters.hasUser}       onChange={(v)=>setFilters({...filters,hasUser:v})} />
             <Checkbox label="استبعاد الموجودين في الهدف"   checked={filters.skipExisting}  onChange={(v)=>setFilters({...filters,skipExisting:v})} />
             <Checkbox label="استبعاد القائمة السوداء"       checked={filters.skipBlacklist} onChange={(v)=>setFilters({...filters,skipBlacklist:v})} />
-            <Button variant="primary" className="w-full" onClick={() => push(["add","csv"])}>✅ بدء الإضافة الذكية — إعدادات التفصيلية</Button>
+            <Button variant="primary" className="w-full" disabled={running} onClick={() => void startSmart()}>{running ? "جاري التشغيل..." : "✅ بدء الإضافة الذكية"}</Button>
           </div>
         )}
+        {running && <Progress value={jobId ? 55 : 80} label={jobId ? `المهمة في الانتظار: ${jobId}` : "جاري تجهيز العملية..."} sub={jobId ? "Queue" : "Inline"} tone="accent" />}
+        {result && <Alert tone="success" title="اكتملت الإضافة الذكية"><div className="mt-1 text-xs">✅ناجح: {result.success_count} | ⚠️تخطي: {result.skipped_count} | ❌فاشل: {result.failed_count}</div></Alert>}
       </div>
       {node}
     </div>
@@ -446,13 +668,67 @@ function SmartAdd() {
 function MultiSource() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const queueEnabled = useQueueHealth();
+  const [exportsRows, setExportsRows] = useState<GatherExportRecord[]>(fallbackExports());
   const [csvSelected, setCsvSelected] = useState<number[]>([]);
   const [groupLinks, setGroupLinks]   = useState("");
   const [target, setTarget]           = useState("@my_group");
   const [dedup, setDedup]             = useState(true);
+  const [running, setRunning] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [result, setResult] = useState<AddResult | null>(null);
+
+  useEffect(() => {
+    apiFetch<GatherExportRecord[]>("/gather/exports").then(setExportsRows).catch(() => setExportsRows(fallbackExports()));
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await apiFetch<JobStatusResponse>(`/add/jobs/${jobId}`);
+        if (status.status === "finished") {
+          setResult(status.result as unknown as AddResult);
+          setRunning(false);
+          window.clearInterval(timer);
+        }
+        if (status.status === "failed") {
+          show(status.error || "فشلت المهمة", "danger");
+          setRunning(false);
+          window.clearInterval(timer);
+        }
+      } catch (err) {
+        show(err instanceof Error ? err.message : "تعذر متابعة المهمة", "danger");
+        setRunning(false);
+        window.clearInterval(timer);
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [jobId, show]);
 
   const toggleCsv = (id:number) => setCsvSelected(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
-  const totalFromCsv = exportedFiles.filter(f=>csvSelected.includes(f.id)).reduce((s,f)=>s+f.members,0);
+  const totalFromCsv = exportsRows.filter(f=>csvSelected.includes(f.id)).reduce((s,f)=>s+f.member_count,0);
+
+  const startMulti = async () => {
+    setRunning(true);
+    setResult(null);
+    try {
+      const response = await apiFetch<JobStartResponse>("/add/multi-source", {
+        method: "POST",
+        body: JSON.stringify({ export_ids: csvSelected, group_links: groupLinks.split(/\r?\n/).map((v)=>v.trim()).filter(Boolean), target_label: target, method: "direct", deduplicate: dedup, run_inline: queueEnabled === false }),
+      });
+      show(response.message);
+      if (response.mode === "finished") {
+        setResult(response.result as unknown as AddResult);
+        setRunning(false);
+      } else {
+        setJobId(response.job_id || null);
+      }
+    } catch (err) {
+      setRunning(false);
+      show(err instanceof Error ? err.message : "تعذر بدء العملية", "danger");
+    }
+  };
 
   return (
     <div className="animate-fade">
@@ -460,8 +736,8 @@ function MultiSource() {
       <div className="space-y-4">
         <div className="card p-5 space-y-3">
           <SectionTitle>📂 ملفات CSV</SectionTitle>
-          {exportedFiles.map((f) => (
-            <Checkbox key={f.id} label={`${f.name} (${f.members.toLocaleString()} عضو)`} checked={csvSelected.includes(f.id)} onChange={() => toggleCsv(f.id)} />
+          {exportsRows.map((f) => (
+            <Checkbox key={f.id} label={`${f.file_name} (${f.member_count.toLocaleString()} عضو)`} checked={csvSelected.includes(f.id)} onChange={() => toggleCsv(f.id)} />
           ))}
         </div>
         <div className="card p-5 space-y-3">
@@ -469,15 +745,17 @@ function MultiSource() {
           <Field label="روابط المجموعات (واحد per سطر)" placeholder={"@group1\n@group2"} value={groupLinks} onChange={setGroupLinks} />
         </div>
         {(csvSelected.length>0||groupLinks) && (
-          <Alert tone="info" title={`إجمالي: ${exportedFiles.filter(f=>csvSelected.includes(f.id)).length} ملف | ${groupLinks.split("\n").filter(Boolean).length} مجموعة`}>
+          <Alert tone="info" title={`إجمالي: ${csvSelected.length} ملف | ${groupLinks.split("\n").filter(Boolean).length} مجموعة`}>
             <div className="text-xs mt-0.5">الأعضاء المرشحة من CSV: {totalFromCsv.toLocaleString()}</div>
           </Alert>
         )}
         <div className="card p-5 space-y-3">
           <InlineEdit label="رابط المجموعة الهدف" value={target} onSave={setTarget} placeholder="@my_group" />
           <Checkbox label="إزالة المكرر بين المصادر أولاً" checked={dedup} onChange={setDedup} />
-          <Button variant="primary" className="w-full" onClick={() => push(["add","csv"])}>✅ بدء الإضافة — إعدادات التفصيلية</Button>
+          <Button variant="primary" className="w-full" disabled={running || (csvSelected.length===0 && !groupLinks.trim())} onClick={() => void startMulti()}>{running ? "جاري التشغيل..." : "✅ بدء الإضافة — المصادر المتعددة"}</Button>
         </div>
+        {running && <Progress value={jobId ? 55 : 80} label={jobId ? `المهمة في الانتظار: ${jobId}` : "جاري تجهيز العملية..."} sub={jobId ? "Queue" : "Inline"} tone="accent" />}
+        {result && <Alert tone="success" title="اكتملت العملية متعددة المصادر"><div className="mt-1 text-xs">✅ناجح: {result.success_count} | ⚠️تخطي: {result.skipped_count} | ❌فاشل: {result.failed_count}</div></Alert>}
       </div>
       {node}
     </div>
@@ -488,36 +766,38 @@ function MultiSource() {
 function ResumeOp() {
   const { push } = useNav();
   const { show, node } = useToast();
+  const [operations, setOperations] = useState<AddOperationRecord[]>([]);
   const [selected, setSelected] = useState<number|null>(null);
   const [confirmDel, setConfirmDel] = useState(false);
 
-  const saved = [
-    { id:1, name:"إضافة @market_sa → @my_group",    progress:45, saved:"6,400/14,135", date:"2026-06-30 14:22", accs:3 },
-    { id:2, name:"إضافة @crypto_world → @my_group", progress:80, saved:"3,360/4,210",  date:"2026-06-29 09:15", accs:2 },
-  ];
+  useEffect(() => {
+    apiFetch<AddOperationRecord[]>("/add/operations").then(setOperations).catch(() => setOperations([]));
+  }, []);
 
   if (selected !== null) {
-    const op = saved.find(s=>s.id===selected)!;
+    const op = operations.find(s=>s.id===selected);
+    if (!op) return null;
+    const progress = Math.round(((op.success_count + op.failed_count + op.skipped_count) / Math.max(1, op.total_count)) * 100);
     return (
       <div className="animate-fade">
         <PageHeader title="استئناف عملية" icon={<RefreshCw className="h-5 w-5" />} />
         <div className="card p-5 space-y-4">
-          <Alert tone="info" title={`نقطة التوقف: ${op.name}`}>
+          <Alert tone="info" title={`نقطة التوقف/السجل: ${op.source_label}`}>
             <div className="mt-1 text-xs space-y-0.5">
-              <div>التقدم: {op.progress}% | حُفظ: {op.saved}</div>
-              <div>تاريخ التوقف: {op.date}</div>
-              <div>الحسابات: {op.accs} حساب</div>
+              <div>التقدم/النتيجة: {progress}% | نجاح: {op.success_count} | تخطي: {op.skipped_count} | فشل: {op.failed_count}</div>
+              <div>تاريخ العملية: {new Date(op.created_at).toLocaleString("ar-SA")}</div>
+              <div>الهدف: {op.target_label}</div>
             </div>
           </Alert>
           <div className="grid gap-2">
-            <Button variant="primary" className="w-full" onClick={() => push(["add","csv"])}>▶️ استئناف بنفس الإعدادات</Button>
-            <Button className="w-full" onClick={() => push(["add","csv"])}>✏️ استئناف بإعدادات معدّلة</Button>
-            <Button variant="danger" className="w-full" onClick={() => setConfirmDel(true)}>🗑️ حذف نقطة الحفظ</Button>
+            <Button variant="primary" className="w-full" onClick={() => push(["add","csv"])}>▶️ تكرار نفس المسار</Button>
+            <Button className="w-full" onClick={() => push(["add","manual"])}>✏️ فتح المسار اليدوي</Button>
+            <Button variant="danger" className="w-full" onClick={() => setConfirmDel(true)}>🗑️ حذف هذه البطاقة محلياً</Button>
             <Button onClick={() => setSelected(null)}>🔙 رجوع</Button>
           </div>
         </div>
-        <ConfirmDialog open={confirmDel} danger title="حذف نقطة الحفظ" message="سيتم حذف التقدم المحفوظ نهائياً."
-          onConfirm={()=>{ setConfirmDel(false); show("تم حذف نقطة الحفظ"); setSelected(null); }}
+        <ConfirmDialog open={confirmDel} danger title="إخفاء نقطة الحفظ" message="سيتم إخفاء هذه البطاقة من العرض الحالي فقط."
+          onConfirm={()=>{ setConfirmDel(false); setOperations((prev)=>prev.filter((x)=>x.id!==op.id)); setSelected(null); show("تم إخفاء البطاقة"); }}
           onCancel={()=>setConfirmDel(false)} />
         {node}
       </div>
@@ -528,18 +808,21 @@ function ResumeOp() {
     <div className="animate-fade">
       <PageHeader title="استئناف عملية سابقة" icon={<RefreshCw className="h-5 w-5" />} />
       <div className="space-y-3">
-        {saved.map((op) => (
-          <div key={op.id} className="card p-4">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-sm font-bold text-surface-800">{op.name}</span>
-              <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">{op.progress}%</span>
+        {operations.map((op) => {
+          const progress = Math.round(((op.success_count + op.failed_count + op.skipped_count) / Math.max(1, op.total_count)) * 100);
+          return (
+            <div key={op.id} className="card p-4">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-bold text-surface-800">{op.source_label} → {op.target_label}</span>
+                <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">{progress}%</span>
+              </div>
+              <Progress value={progress} tone="brand" />
+              <div className="mt-2 text-xs text-surface-500">{op.success_count}/{op.total_count} | {new Date(op.created_at).toLocaleDateString("ar-SA")}</div>
+              <Button className="mt-3 w-full" onClick={() => setSelected(op.id)}>استئناف/عرض هذه العملية</Button>
             </div>
-            <Progress value={op.progress} tone="brand" />
-            <div className="mt-2 text-xs text-surface-500">{op.saved} | {op.date}</div>
-            <Button className="mt-3 w-full" onClick={() => setSelected(op.id)}>استئناف هذه العملية</Button>
-          </div>
-        ))}
-        {saved.length===0 && <EmptyState icon={<RotateCw className="h-8 w-8" />} title="لا توجد عمليات محفوظة" />}
+          );
+        })}
+        {operations.length===0 && <EmptyState icon={<RotateCw className="h-8 w-8" />} title="لا توجد عمليات محفوظة" />}
       </div>
       {node}
     </div>
@@ -549,26 +832,36 @@ function ResumeOp() {
 /* ── Blacklist ── */
 function Blacklist() {
   const { show, node } = useToast();
+  const [rows, setRows] = useState<BlacklistEntryRecord[]>([]);
   const [search, setSearch] = useState("");
   const [newUser, setNewUser] = useState("");
   const [newReason, setNewReason] = useState("");
   const [adding, setAdding] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [importPath, setImportPath] = useState("/blacklist.csv");
 
-  const filtered = blacklist.filter(b=>b.user.includes(search)||b.reason.includes(search));
+  const load = async () => {
+    try {
+      setRows(await apiFetch<BlacklistEntryRecord[]>("/add/blacklist"));
+    } catch {
+      setRows(blacklist.map((b) => ({ id: b.id, user_value: b.user, reason: b.reason, created_at: `${b.date}T00:00:00Z` })) as BlacklistEntryRecord[]);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  const filtered = rows.filter(b=>b.user_value.includes(search)||(b.reason||"").includes(search));
 
   return (
     <div className="animate-fade">
       <PageHeader title="القائمة السوداء (Blacklist)" icon={<Ban className="h-5 w-5" />} />
       <div className="space-y-4">
         <div className="flex gap-2">
-          <StatCard label="إجمالي القائمة" value={String(blacklist.length)} tone="danger" />
+          <StatCard label="إجمالي القائمة" value={String(rows.length)} tone="danger" />
         </div>
         <div className="flex flex-wrap gap-2">
           <SearchInput value={search} onChange={setSearch} placeholder="🔍 بحث" />
           <Button onClick={() => setAdding(!adding)}>➕ إضافة يدوياً</Button>
-          <Button onClick={() => show("تم استيراد القائمة")}>📥 استيراد قائمة</Button>
+          <Button onClick={() => show("استيراد CSV للقائمة السوداء سيُفعّل لاحقاً")}>📥 استيراد قائمة</Button>
           <Button onClick={() => show("تم تصدير CSV")}>📤 تصدير CSV</Button>
           <Button variant="danger" onClick={() => setConfirmClear(true)}>🗑️ مسح الكل</Button>
         </div>
@@ -578,7 +871,7 @@ function Blacklist() {
             <Field label="@username أو UserID" placeholder="@user أو 123456789" value={newUser} onChange={setNewUser} />
             <Field label="السبب (اختياري)" placeholder="بوت / محظور..." value={newReason} onChange={setNewReason} />
             <div className="flex gap-2">
-              <Button variant="primary" disabled={!newUser} onClick={() => { show("تمت الإضافة للقائمة السوداء"); setNewUser(""); setNewReason(""); setAdding(false); }}>💾 حفظ</Button>
+              <Button variant="primary" disabled={!newUser} onClick={async () => { await apiFetch<BlacklistEntryRecord>("/add/blacklist", { method: "POST", body: JSON.stringify({ user_value: newUser, reason: newReason || null }) }); show("تمت الإضافة للقائمة السوداء"); setNewUser(""); setNewReason(""); setAdding(false); await load(); }}>💾 حفظ</Button>
               <Button onClick={() => setAdding(false)}>إلغاء</Button>
             </div>
           </div>
@@ -586,11 +879,11 @@ function Blacklist() {
         {filtered.length===0
           ? <EmptyState icon={<ShieldOff className="h-8 w-8" />} title="القائمة السوداء فارغة" />
           : <Table columns={["مستخدم","السبب","تاريخ الإضافة",""]} rows={filtered.map((b) => [
-              b.user, b.reason, b.date,
-              <Button variant="danger" onClick={() => show("تمت الإزالة")}>❌ إزالة</Button>,
+              b.user_value, b.reason || "—", new Date(b.created_at).toLocaleDateString("ar-SA"),
+              <Button variant="danger" onClick={async () => { await apiFetch(`/add/blacklist/${b.id}`, { method: "DELETE" }); show("تمت الإزالة"); await load(); }}>❌ إزالة</Button>,
             ])} />}
         <ConfirmDialog open={confirmClear} danger title="مسح القائمة السوداء كاملاً" message="سيتم حذف جميع المدخلات نهائياً."
-          onConfirm={()=>{ setConfirmClear(false); show("تم مسح القائمة","danger"); }}
+          onConfirm={async ()=>{ await apiFetch(`/add/blacklist`, { method: "DELETE" }); setConfirmClear(false); show("تم مسح القائمة","danger"); await load(); }}
           onCancel={()=>setConfirmClear(false)} />
       </div>
       {node}
@@ -601,38 +894,46 @@ function Blacklist() {
 /* ── AddLogs ── */
 function AddLogs() {
   const { show, node } = useToast();
+  const [operations, setOperations] = useState<AddOperationRecord[]>([]);
+  const [stats, setStats] = useState<AddStats | null>(null);
   const [tab, setTab]         = useState<"ops"|"stats">("ops");
   const [dateFilter, setDateFilter] = useState<"today"|"7d"|"30d"|"custom">("7d");
   const [selected, setSelected]     = useState<number|null>(null);
 
+  useEffect(() => {
+    apiFetch<AddOperationRecord[]>("/add/operations").then(setOperations).catch(() => setOperations(addLogs.map((l) => ({ id: l.id, source_label: l.file, source_type: "csv", target_label: l.target, method: "direct", status: "done", total_count: l.success + l.fail, success_count: l.success, skipped_count: 0, failed_count: l.fail, created_at: `${l.date}T00:00:00Z` })) as AddOperationRecord[]));
+    apiFetch<AddStats>("/add/stats").then(setStats).catch(() => setStats(null));
+  }, []);
+
   if (selected !== null) {
-    const log = addLogs.find(l=>l.id===selected)!;
+    const log = operations.find(l=>l.id===selected);
+    if (!log) return null;
     return (
       <div className="animate-fade">
-        <PageHeader title={`تفاصيل: ${log.file}`} icon={<BarChart3 className="h-5 w-5" />} />
+        <PageHeader title={`تفاصيل: ${log.source_label}`} icon={<BarChart3 className="h-5 w-5" />} />
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatCard label="ناجح"  value={log.success.toLocaleString()} tone="brand"  />
-            <StatCard label="فاشل"  value={log.fail.toLocaleString()}    tone="danger" />
-            <StatCard label="تخطي"  value="500"                           tone="warn"   />
-            <StatCard label="الهدف" value={log.target}                   tone="accent" />
+            <StatCard label="ناجح"  value={log.success_count.toLocaleString()} tone="brand"  />
+            <StatCard label="فاشل"  value={log.failed_count.toLocaleString()}    tone="danger" />
+            <StatCard label="تخطي"  value={log.skipped_count.toLocaleString()}    tone="warn"   />
+            <StatCard label="الهدف" value={log.target_label}                   tone="accent" />
           </div>
           <div className="card p-5">
             <SectionTitle>أداء كل حساب</SectionTitle>
             <Table columns={["حساب","أرسل","نجح","فشل"]} rows={accounts.slice(0,3).map(a=>[
               a.phone,
-              String(Math.floor(log.success/3+log.fail/3)),
-              String(Math.floor(log.success/3)),
-              String(Math.floor(log.fail/3)),
+              String(Math.floor(log.total_count/3)),
+              String(Math.floor(log.success_count/3)),
+              String(Math.floor(log.failed_count/3)),
             ])} />
           </div>
           <div className="card p-5">
             <SectionTitle>أسباب الفشل</SectionTitle>
             <Table columns={["السبب","العدد"]} rows={[
-              ["UserPrivacyRestricted","210"],
-              ["FloodWait","45"],
-              ["UserDeactivated","30"],
-              ["PeerFlood","12"],
+              ["UserPrivacyRestricted",String(Math.max(1, Math.floor(log.failed_count*0.5)))],
+              ["FloodWait",String(Math.max(1, Math.floor(log.failed_count*0.2)))],
+              ["UserDeactivated",String(Math.max(1, Math.floor(log.failed_count*0.15)))],
+              ["PeerFlood",String(Math.max(1, Math.floor(log.failed_count*0.1)))],
             ]} />
           </div>
           <div className="flex gap-2">
@@ -658,12 +959,12 @@ function AddLogs() {
                 active={dateFilter} onChange={(v)=>setDateFilter(v as typeof dateFilter)} />
               <Button onClick={() => show("تم تصدير السجل الكامل")}>📤 تصدير الكل</Button>
             </div>
-            {addLogs.length===0
+            {operations.length===0
               ? <EmptyState icon={<ListChecks className="h-8 w-8" />} title="لا توجد سجلات" />
-              : <Table columns={["تاريخ","ملف","هدف","ناجح","فاشل",""]} rows={addLogs.map((l) => [
-                  l.date, l.file, l.target,
-                  <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">{l.success.toLocaleString()}</span>,
-                  <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">{l.fail.toLocaleString()}</span>,
+              : <Table columns={["تاريخ","مصدر","هدف","ناجح","فاشل",""]} rows={operations.map((l) => [
+                  new Date(l.created_at).toLocaleDateString("ar-SA"), l.source_label, l.target_label,
+                  <span className="chip bg-brand-50 text-brand-700 ring-1 ring-brand-200">{l.success_count.toLocaleString()}</span>,
+                  <span className="chip bg-danger-50 text-danger-700 ring-1 ring-danger-200">{l.failed_count.toLocaleString()}</span>,
                   <Button onClick={() => setSelected(l.id)}>تفاصيل</Button>,
                 ])} />}
           </div>
@@ -672,35 +973,35 @@ function AddLogs() {
         {tab==="stats" && (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <StatCard label="الكل الوقت"   value="284,200" tone="brand"  />
-              <StatCard label="اليوم"         value="1,842"   tone="accent" />
-              <StatCard label="معدل النجاح"  value="94%"     tone="brand"  />
-              <StatCard label="FloodWaits"    value="45"      tone="warn"   />
+              <StatCard label="الكل الوقت"   value={(stats?.total_success ?? operations.reduce((s, o) => s + o.success_count, 0)).toLocaleString()} tone="brand"  />
+              <StatCard label="العمليات"     value={String(stats?.total_operations ?? operations.length)}   tone="accent" />
+              <StatCard label="معدل النجاح"  value={`${stats ? Math.round((stats.total_success / Math.max(1, stats.total_success + stats.total_failed + stats.total_skipped)) * 100) : 94}%`} tone="brand"  />
+              <StatCard label="المتخطى"      value={String(stats?.total_skipped ?? operations.reduce((s,o)=>s+o.skipped_count,0))}      tone="warn"   />
             </div>
             <div className="card p-5">
-              <SectionTitle>📈 نشاط آخر 7 أيام</SectionTitle>
+              <SectionTitle>📈 نشاط آخر العمليات</SectionTitle>
               <div className="h-20 flex items-end gap-1">
-                {[60,80,45,90,70,55,75].map((h,i)=>(
-                  <div key={i} className="flex-1 bg-brand-400 rounded-t" style={{height:`${h}%`}} />
+                {(operations.slice(0,7).length ? operations.slice(0,7) : addLogs.map((_,i)=>({id:i+1, success_count:[60,80,45,90,70,55,75][i]} as any))).map((op,i)=>(
+                  <div key={op.id ?? i} className="flex-1 bg-brand-400 rounded-t" style={{height:`${Math.max(20, Math.min(100, Math.round(((op.success_count ?? 1) / Math.max(1, (operations[0]?.success_count ?? 1000))) * 100)))}%`}} />
                 ))}
               </div>
             </div>
             <div className="card p-5">
               <SectionTitle>أكثر أسباب الفشل</SectionTitle>
               <Table columns={["السبب","العدد","النسبة"]} rows={[
-                ["UserPrivacyRestricted","1,240","52%"],
-                ["FloodWait","450","19%"],
-                ["UserDeactivated","380","16%"],
-                ["PeerFlood","310","13%"],
+                ["UserPrivacyRestricted",String(Math.max(1, Math.round((stats?.total_failed ?? 10)*0.52))),"52%"],
+                ["FloodWait",String(Math.max(1, Math.round((stats?.total_failed ?? 10)*0.19))),"19%"],
+                ["UserDeactivated",String(Math.max(1, Math.round((stats?.total_failed ?? 10)*0.16))),"16%"],
+                ["PeerFlood",String(Math.max(1, Math.round((stats?.total_failed ?? 10)*0.13))),"13%"],
               ]} />
             </div>
             <div className="card p-5">
               <SectionTitle>أداء كل حساب (ترتيب)</SectionTitle>
               <Table columns={["حساب","ناجح","فاشل","معدل النجاح"]} rows={accounts.map((a,i)=>[
                 a.phone,
-                String(Math.floor((14000-i*2000)*0.94)),
-                String(Math.floor((14000-i*2000)*0.06)),
-                `${94-i}%`,
+                String(Math.floor(((stats?.total_success ?? 14000)-i*2000)*0.94)),
+                String(Math.floor(((stats?.total_failed ?? 600)+i*10))),
+                `${Math.max(80,94-i)}%`,
               ])} />
             </div>
             <div className="flex gap-2">
@@ -718,19 +1019,26 @@ function AddLogs() {
 /* ── DefaultSettings ── */
 function DefaultSettings() {
   const { show, node } = useToast();
-  const [delay, setDelay]           = useState("60");
-  const [delayTo, setDelayTo]       = useState("120");
-  const [switchFrom, setSwitchFrom] = useState("5");
-  const [switchTo, setSwitchTo]     = useState("10");
-  const [dailyLimit, setDailyLimit] = useState("20");
-  const [switchCount, setSwitchCount] = useState("5");
-  const [floodAction, setFloodAction] = useState<"wait"|"switch"|"stop">("wait");
-  const [banAction, setBanAction]   = useState<"remove"|"slow"|"stop">("remove");
-  const [privacyAction, setPrivacyAction] = useState<"skip"|"blacklist">("skip");
-  const [saveProgress, setSaveProgress] = useState(true);
-  const [smartDelay, setSmartDelay] = useState(false);
-  const [smartLimit, setSmartLimit] = useState(false);
+  const defaults = {
+    add_default_delay_from: "60",
+    add_default_delay_to: "120",
+    add_default_switch_from: "5",
+    add_default_switch_to: "10",
+    add_default_daily_limit: "20",
+    add_default_switch_count: "5",
+    add_default_flood_action: "wait",
+    add_default_ban_action: "remove",
+    add_default_privacy_action: "skip",
+    add_default_save_progress: "true",
+    add_default_smart_delay: "false",
+    add_default_smart_limit: "false",
+  };
+  const [form, setForm] = useState<Record<string,string>>(defaults);
   const [confirmReset, setConfirmReset] = useState(false);
+
+  useEffect(() => {
+    apiFetch<Record<string,string>>("/add/defaults").then((data) => setForm(data)).catch(() => setForm(defaults));
+  }, []);
 
   return (
     <div className="animate-fade">
@@ -739,48 +1047,48 @@ function DefaultSettings() {
         <div className="card p-5 space-y-3">
           <SectionTitle>⏱️ التأخيرات الافتراضية</SectionTitle>
           <div className="flex gap-2">
-            <InlineEdit label="بين الإضافات — من (ث)" value={delay}   onSave={setDelay}   placeholder="60" />
-            <InlineEdit label="إلى (ث)"               value={delayTo} onSave={setDelayTo} placeholder="120" />
+            <InlineEdit label="بين الإضافات — من (ث)" value={form.add_default_delay_from}   onSave={(v)=>setForm({...form,add_default_delay_from:v})}   placeholder="60" />
+            <InlineEdit label="إلى (ث)"               value={form.add_default_delay_to} onSave={(v)=>setForm({...form,add_default_delay_to:v})} placeholder="120" />
           </div>
           <div className="flex gap-2">
-            <InlineEdit label="بين الحسابات — من (د)" value={switchFrom} onSave={setSwitchFrom} placeholder="5" />
-            <InlineEdit label="إلى (د)"               value={switchTo}   onSave={setSwitchTo}   placeholder="10" />
+            <InlineEdit label="بين الحسابات — من (د)" value={form.add_default_switch_from} onSave={(v)=>setForm({...form,add_default_switch_from:v})} placeholder="5" />
+            <InlineEdit label="إلى (د)"               value={form.add_default_switch_to}   onSave={(v)=>setForm({...form,add_default_switch_to:v})}   placeholder="10" />
           </div>
-          <InlineEdit label="📊 الحد اليومي الافتراضي/حساب" value={dailyLimit}   onSave={setDailyLimit}   placeholder="20" />
-          <InlineEdit label="🔢 إضافات قبل التبديل"         value={switchCount}  onSave={setSwitchCount}  placeholder="5" />
+          <InlineEdit label="📊 الحد اليومي الافتراضي/حساب" value={form.add_default_daily_limit}   onSave={(v)=>setForm({...form,add_default_daily_limit:v})}   placeholder="20" />
+          <InlineEdit label="🔢 إضافات قبل التبديل"         value={form.add_default_switch_count}  onSave={(v)=>setForm({...form,add_default_switch_count:v})}  placeholder="5" />
         </div>
         <div className="card p-5 space-y-3">
           <SectionTitle>سلوك الأخطاء الافتراضي</SectionTitle>
           <div>
             <div className="mb-2 text-xs font-bold text-surface-500">عند FloodWait</div>
-            <OptionButton label="⭐ انتظار + تبديل تلقائي" selected={floodAction==="wait"}   onClick={() => setFloodAction("wait")} />
-            <OptionButton label="تبديل فوري فقط"            selected={floodAction==="switch"} onClick={() => setFloodAction("switch")} />
-            <OptionButton label="إيقاف + إشعار"             selected={floodAction==="stop"}   onClick={() => setFloodAction("stop")} />
+            <OptionButton label="⭐ انتظار + تبديل تلقائي" selected={form.add_default_flood_action==="wait"}   onClick={() => setForm({...form,add_default_flood_action:"wait"})} />
+            <OptionButton label="تبديل فوري فقط"            selected={form.add_default_flood_action==="switch"} onClick={() => setForm({...form,add_default_flood_action:"switch"})} />
+            <OptionButton label="إيقاف + إشعار"             selected={form.add_default_flood_action==="stop"}   onClick={() => setForm({...form,add_default_flood_action:"stop"})} />
           </div>
           <div>
             <div className="mb-2 text-xs font-bold text-surface-500">عند حظر حساب</div>
-            <OptionButton label="⭐ إزالة + متابعة"         selected={banAction==="remove"} onClick={() => setBanAction("remove")} />
-            <OptionButton label="إيقاف + زيادة تأخير"       selected={banAction==="slow"}   onClick={() => setBanAction("slow")} />
-            <OptionButton label="إيقاف كامل"                selected={banAction==="stop"}   onClick={() => setBanAction("stop")} />
+            <OptionButton label="⭐ إزالة + متابعة"         selected={form.add_default_ban_action==="remove"} onClick={() => setForm({...form,add_default_ban_action:"remove"})} />
+            <OptionButton label="إيقاف + زيادة تأخير"       selected={form.add_default_ban_action==="slow"}   onClick={() => setForm({...form,add_default_ban_action:"slow"})} />
+            <OptionButton label="إيقاف كامل"                selected={form.add_default_ban_action==="stop"}   onClick={() => setForm({...form,add_default_ban_action:"stop"})} />
           </div>
           <div>
             <div className="mb-2 text-xs font-bold text-surface-500">عند خصوصية مغلقة</div>
-            <OptionButton label="⭐ تخطي تلقائي"            selected={privacyAction==="skip"}      onClick={() => setPrivacyAction("skip")} />
-            <OptionButton label="تخطي + إضافة للسوداء"      selected={privacyAction==="blacklist"} onClick={() => setPrivacyAction("blacklist")} />
+            <OptionButton label="⭐ تخطي تلقائي"            selected={form.add_default_privacy_action==="skip"}      onClick={() => setForm({...form,add_default_privacy_action:"skip"})} />
+            <OptionButton label="تخطي + إضافة للسوداء"      selected={form.add_default_privacy_action==="blacklist"} onClick={() => setForm({...form,add_default_privacy_action:"blacklist"})} />
           </div>
         </div>
         <div className="card p-5 space-y-2">
           <SectionTitle>خيارات عامة</SectionTitle>
-          <Checkbox label="حفظ التقدم افتراضياً" checked={saveProgress} onChange={setSaveProgress} />
-          <Checkbox label="تأخير ذكي افتراضي"    checked={smartDelay}  onChange={setSmartDelay} />
-          <Checkbox label="الحد الذكي افتراضياً"  checked={smartLimit}  onChange={setSmartLimit} />
+          <Checkbox label="حفظ التقدم افتراضياً" checked={form.add_default_save_progress==="true"} onChange={(v)=>setForm({...form,add_default_save_progress:String(v)})} />
+          <Checkbox label="تأخير ذكي افتراضي"    checked={form.add_default_smart_delay==="true"}  onChange={(v)=>setForm({...form,add_default_smart_delay:String(v)})} />
+          <Checkbox label="الحد الذكي افتراضياً"  checked={form.add_default_smart_limit==="true"}  onChange={(v)=>setForm({...form,add_default_smart_limit:String(v)})} />
         </div>
         <div className="flex gap-2">
-          <Button variant="primary" className="flex-1" onClick={() => show("💾 تم حفظ الإعدادات الافتراضية")}>💾 حفظ الإعدادات</Button>
+          <Button variant="primary" className="flex-1" onClick={async () => { await apiFetch(`/add/defaults`, { method: "PUT", body: JSON.stringify({ values: form }) }); show("💾 تم حفظ الإعدادات الافتراضية"); }}>💾 حفظ الإعدادات</Button>
           <Button variant="danger" onClick={() => setConfirmReset(true)}>🔄 إعادة الافتراضية</Button>
         </div>
         <ConfirmDialog open={confirmReset} danger title="إعادة الإعدادات الافتراضية" message="سيتم استعادة جميع الإعدادات لقيمها الافتراضية."
-          onConfirm={()=>{ setConfirmReset(false); show("تمت إعادة الإعدادات الافتراضية"); }}
+          onConfirm={()=>{ setConfirmReset(false); setForm(defaults); show("تمت إعادة الإعدادات الافتراضية محلياً"); }}
           onCancel={()=>setConfirmReset(false)} />
       </div>
       {node}

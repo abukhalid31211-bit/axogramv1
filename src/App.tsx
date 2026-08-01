@@ -1,4 +1,5 @@
 import { NavProvider, useNav } from "./nav";
+import { AuthProvider, useAuth } from "./auth";
 import { HomeScreen } from "./screens/Home";
 import { AccountsModule, AccountsScreen, AccountDetail } from "./screens/Accounts";
 import { GatherModule, GatherScreen } from "./screens/Gather";
@@ -11,6 +12,7 @@ import { SecurityModule, SecurityScreen } from "./screens/Security";
 import { CampaignsModule, CampaignsScreen } from "./screens/Campaigns";
 import { MassDmModule, MassDmScreen } from "./screens/MassDm";
 import { ExitScreen } from "./screens/Exit";
+import { LoginScreen } from "./screens/Login";
 
 function Router() {
   const { current } = useNav();
@@ -69,12 +71,34 @@ function Shell() {
   );
 }
 
-export default function App() {
+function ProtectedApp() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="grid min-h-screen place-items-center">
+        <div className="rounded-2xl border border-surface-200 bg-white px-6 py-4 text-sm text-surface-500 shadow-card">
+          جاري تحميل الجلسة...
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) return <LoginScreen />;
+
   return (
     <NavProvider>
       <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
         <Shell />
       </div>
     </NavProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <ProtectedApp />
+    </AuthProvider>
   );
 }
