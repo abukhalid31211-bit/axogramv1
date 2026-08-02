@@ -21,10 +21,10 @@ TELEGRAM_API_HASH_KEY = "telegram_api_hash"
 PLACEHOLDER_API_ID = "12345678"
 PLACEHOLDER_API_HASH = "a1b2c3d4e5f6"
 
-# Single Arabic message shown to subscribers everywhere credentials are missing.
+# Single Arabic message shown everywhere credentials are missing.
 TELEGRAM_CREDENTIALS_MISSING_MESSAGE = (
-    "لم يتم ضبط Telegram API ID و API Hash من إدارة المنصة بعد — تواصل مع الإدارة "
-    "(لا حاجة لإدخال أي بيانات API من جهتك)"
+    "يجب على مالك الموقع ضبط Telegram API ID و API Hash من لوحة الإدارة أولاً "
+    "— لا حاجة لإدخال أي بيانات API من جهتك"
 )
 
 

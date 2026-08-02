@@ -147,7 +147,7 @@ def build_bot_client(token: str, api_id: int | None = None, api_hash: str | None
                 api_id, api_hash = None, None
     if not api_id or not api_hash:
         raise ValueError(
-            "لم يتم ضبط Telegram API ID و API Hash من إدارة المنصة بعد — تواصل مع الإدارة"
+            "لم يتم ضبط Telegram API ID و API Hash من لوحة الإدارة بعد — تواصل مع الإدارة"
         )
     return TelegramClient(StringSession(), int(api_id), api_hash, device_model="Axogram Notifier")
 

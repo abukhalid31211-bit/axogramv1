@@ -157,3 +157,14 @@ class TelegramCredentialsUpdate(BaseModel):
     api_id: str = Field(min_length=1)
     # Leave empty to keep the currently stored hash untouched.
     api_hash: str | None = None
+
+
+class TelegramCredentialsResponse(BaseModel):
+    """Legacy shape kept for the older /admin/settings/telegram alias.
+
+    ``api_hash`` is masked — the raw secret is never sent back over the API.
+    """
+
+    api_id: str
+    api_hash: str
+    configured: bool

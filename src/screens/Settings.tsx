@@ -208,7 +208,7 @@ function ApiSettings() {
 
   return (
     <div className="animate-fade">
-      <PageHeader title="API تيليجرام" subtitle="تُدار مركزياً من إدارة المنصة" icon={<KeyRound className="h-5 w-5" />} />
+      <PageHeader title="API تيليجرام" subtitle="يضبطها مالك الموقع من لوحة الإدارة" icon={<KeyRound className="h-5 w-5" />} />
       {loading ? <Spinner label="جاري التحميل..." /> : (
         <div className="mx-auto max-w-lg card p-6 space-y-4">
           {status?.configured ? (
@@ -217,13 +217,13 @@ function ApiSettings() {
             </Alert>
           ) : (
             <Alert tone="warn" title="🔴 بيانات API غير مضبوطة بعد">
-              {status?.message || "تُضبط بيانات API من إدارة المنصة — تواصل مع الإدارة لتفعيل ربط الحسابات."}
+              {status?.message || "يضبط مالك الموقع بيانات API من لوحة الإدارة — تواصل مع الإدارة لتفعيل ربط الحسابات."}
             </Alert>
           )}
 
           <div className="rounded-xl border border-surface-200 bg-surface-50 p-4 text-xs leading-relaxed text-surface-600 space-y-1.5">
             <p>🔒 معرّف API وتجزئة API هما بيانات <span className="font-bold text-surface-800">التطبيق نفسه</span>، وليست بيانات حسابك.</p>
-            <p>✅ يضبطهما مالك المنصة مرة واحدة، ثم يُطبَّقان تلقائياً على كل العمليات: ربط الحسابات، التجميع، الإضافة، الرسائل والحملات.</p>
+            <p>✅ يضبطهما مالك الموقع من لوحة الإدارة مرة واحدة، ثم يُطبَّقان تلقائياً على النظام كامل: ربط الحسابات، التجميع، الإضافة، الرسائل والحملات.</p>
             <p>✋ لن يُطلب منك إدخالهما في أي شاشة — إن ظهرت رسالة بعدم الضبط فتواصل مع الإدارة فقط.</p>
           </div>
 

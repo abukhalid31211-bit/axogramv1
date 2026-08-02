@@ -35,6 +35,7 @@ from app.schemas.admin import (
     SubscriberDetail,
     SubscriberPublic,
     TelegramCredentialsPublic,
+    TelegramCredentialsResponse,
     TelegramCredentialsUpdate,
     UsageRow,
 )
@@ -140,13 +141,15 @@ def _plan_public(db: Session, plan: Plan) -> PlanPublic:
     )
 
 
-def _set_setting(db: Session, key: str, value: str, description: str | None = None) -> None:
+def _set_setting(db: Session, key: str, value: str, description: str | None = None, is_secret: bool = False) -> None:
     row = db.query(AppSetting).filter(AppSetting.key == key).first()
     if row:
         row.value_encrypted = encrypt_value(value)
+        if is_secret:
+            row.is_secret = True
         db.add(row)
     else:
-        db.add(AppSetting(key=key, value_encrypted=encrypt_value(value), description=description))
+        db.add(AppSetting(key=key, value_encrypted=encrypt_value(value), description=description, is_secret=is_secret))
 
 
 # --------------------------------------------------------------------------
@@ -549,6 +552,33 @@ def usage_monitor(db: DbSession, admin: PlatformAdmin) -> list[UsageRow]:
             )
         )
     return rows
+
+
+# Legacy aliases for /admin/settings/telegram — kept so any already-deployed
+# frontend build keeps working. They delegate to the hardened implementation
+# below (/admin/telegram-api) and never echo the raw hash back.
+
+@router.get("/settings/telegram", response_model=TelegramCredentialsResponse)
+def get_admin_telegram_credentials(
+    db: DbSession,
+    _: PlatformAdmin,
+) -> TelegramCredentialsResponse:
+    info = _telegram_credentials_public(db)
+    return TelegramCredentialsResponse(
+        api_id=info.api_id or "",
+        api_hash=info.api_hash_masked or "",  # masked — never the real secret
+        configured=info.configured,
+    )
+
+
+@router.put("/settings/telegram", response_model=MessageResponse)
+def update_admin_telegram_credentials(
+    payload: TelegramCredentialsUpdate,
+    db: DbSession,
+    admin: PlatformAdmin,
+) -> MessageResponse:
+    update_telegram_api(payload, db, admin)
+    return MessageResponse(message="تم حفظ وتطبيق إعدادات API تيليجرام للنظام بالكامل")
 
 
 @router.post("/broadcast", response_model=MessageResponse)

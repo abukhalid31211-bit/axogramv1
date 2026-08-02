@@ -155,7 +155,7 @@ export function AdminScreen({ sub, param }: { sub?: string; param?: string }) {
     ...(selectedId != null ? [{ id: "card", label: "👤 بطاقة المشترك" }] : []),
     { id: "plans", label: "💎 الباقات" },
     { id: "usage", label: "📊 مراقبة الاستخدام" },
-    { id: "telegram-api", label: "🔑 API تيليجرام" },
+    { id: "api", label: "🔑 API تيليجرام" },
     { id: "broadcast", label: "📢 بثّ إشعار" },
     { id: "logs", label: "🧾 سجل العمليات" },
     { id: "emergency", label: "🚨 طوارئ" },
@@ -202,7 +202,7 @@ export function AdminScreen({ sub, param }: { sub?: string; param?: string }) {
       )}
       {tab === "plans" && <PlansTab modules={modules} />}
       {tab === "usage" && <UsageTab />}
-      {tab === "telegram-api" && <TelegramApiTab />}
+      {(tab === "api" || tab === "telegram-api") && <TelegramApiTab />}
       {tab === "broadcast" && <BroadcastTab />}
       {tab === "logs" && <LogsTab />}
       {tab === "emergency" && <EmergencyTab />}
