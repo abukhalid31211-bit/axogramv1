@@ -154,6 +154,7 @@ export function AdminScreen({ sub, param }: { sub?: string; param?: string }) {
     ...(selectedId != null ? [{ id: "card", label: "👤 بطاقة المشترك" }] : []),
     { id: "plans", label: "💎 الباقات" },
     { id: "usage", label: "📊 مراقبة الاستخدام" },
+    { id: "api", label: "🔑 إعدادات API" },
     { id: "broadcast", label: "📢 بثّ إشعار" },
     { id: "logs", label: "🧾 سجل العمليات" },
     { id: "emergency", label: "🚨 طوارئ" },
@@ -200,6 +201,7 @@ export function AdminScreen({ sub, param }: { sub?: string; param?: string }) {
       )}
       {tab === "plans" && <PlansTab modules={modules} />}
       {tab === "usage" && <UsageTab />}
+      {tab === "api" && <ApiTab />}
       {tab === "broadcast" && <BroadcastTab />}
       {tab === "logs" && <LogsTab />}
       {tab === "emergency" && <EmergencyTab />}
@@ -1037,7 +1039,97 @@ function UsageTab() {
 }
 
 // ---------------------------------------------------------------------------
-// 6) Broadcast
+// 6) Global Telegram API Settings
+// ---------------------------------------------------------------------------
+
+function ApiTab() {
+  const toast = useToast();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [apiId, setApiId] = useState("");
+  const [apiHash, setApiHash] = useState("");
+  const [configured, setConfigured] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    apiFetch<{ api_id: string; api_hash: string; configured: boolean }>("/admin/settings/telegram")
+      .then((data) => {
+        setApiId(data.api_id || "");
+        setApiHash(data.api_hash || "");
+        setConfigured(Boolean(data.configured));
+      })
+      .catch((err) => toast.show(err instanceof Error ? err.message : "تعذر تحميل إعدادات API", "danger"))
+      .finally(() => setLoading(false));
+  }, [toast]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleSave = async () => {
+    if (!apiId.trim() || !apiHash.trim()) {
+      toast.show("يجب إدخال معرف API ID وتجزئة API Hash", "danger");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await apiFetch<{ message: string }>("/admin/settings/telegram", {
+        method: "PUT",
+        body: JSON.stringify({ api_id: apiId.trim(), api_hash: apiHash.trim() }),
+      });
+      toast.show(res.message);
+      load();
+    } catch (err) {
+      toast.show(err instanceof Error ? err.message : "تعذر حفظ الإعدادات", "danger");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-xl space-y-4">
+      <Alert tone="info" title="إعدادات API تيليجرام العامة للنظام">
+        إعدادات Telegram API ID و API Hash تُضبط هنا من قِبل مالك الموقع (الإدارة) مرة واحدة وتُطبق على جميع المشتركين والحسابات في النظام بالكامل، بحيث لو أُخفي قسم الإعدادات عن المستخدم فلن يحتاج لإدخالها بنفسه لتسجيل الحسابات.
+      </Alert>
+      {loading ? (
+        <Spinner label="جاري تحميل إعدادات API..." />
+      ) : (
+        <div className="card space-y-4 p-6">
+          <SectionTitle icon={<KeyRound className="h-4 w-4" />}>
+            بيانات اتصال تيليجرام (Apid and hash) {configured ? "🟢 مضبوطة" : "⚠️ غير مضبوطة"}
+          </SectionTitle>
+          <Field
+            label="معرف API (API ID)"
+            value={apiId}
+            onChange={setApiId}
+            placeholder="مثال: 12345678"
+            hint="يمكنك الحصول عليه من my.telegram.org → API Development Tools"
+          />
+          <Field
+            label="تجزئة API (API Hash)"
+            value={apiHash}
+            onChange={setApiHash}
+            placeholder="مثال: a1b2c3d4e5f6"
+          />
+          <div className="pt-2">
+            <Button
+              variant="primary"
+              className="w-full py-3 font-bold"
+              disabled={saving || !apiId.trim() || !apiHash.trim()}
+              onClick={() => void handleSave()}
+            >
+              {saving ? "جاري الحفظ والتطبيق..." : "💾 حفظ وتطبيق على النظام كامل"}
+            </Button>
+          </div>
+        </div>
+      )}
+      {toast.node}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 7) Broadcast
 // ---------------------------------------------------------------------------
 
 function BroadcastTab() {
@@ -1101,7 +1193,7 @@ function BroadcastTab() {
 }
 
 // ---------------------------------------------------------------------------
-// 7) Admin logs
+// 8) Admin logs
 // ---------------------------------------------------------------------------
 
 function LogsTab() {
@@ -1184,7 +1276,7 @@ function LogsTab() {
 }
 
 // ---------------------------------------------------------------------------
-// 8) Emergency
+// 9) Emergency
 // ---------------------------------------------------------------------------
 
 function EmergencyTab() {

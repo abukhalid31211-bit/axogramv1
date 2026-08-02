@@ -34,10 +34,13 @@ from app.schemas.admin import (
     SubscriberCreate,
     SubscriberDetail,
     SubscriberPublic,
+    TelegramCredentialsResponse,
+    TelegramCredentialsUpdate,
     UsageRow,
 )
 from app.schemas.common import MessageResponse
 from app.services.audit import write_audit_log
+from app.services.settings import get_setting_value
 from app.services.subscription import (
     ALL_MODULES,
     DEFAULT_QUOTAS,
@@ -138,13 +141,15 @@ def _plan_public(db: Session, plan: Plan) -> PlanPublic:
     )
 
 
-def _set_setting(db: Session, key: str, value: str, description: str | None = None) -> None:
+def _set_setting(db: Session, key: str, value: str, description: str | None = None, is_secret: bool = False) -> None:
     row = db.query(AppSetting).filter(AppSetting.key == key).first()
     if row:
         row.value_encrypted = encrypt_value(value)
+        if is_secret:
+            row.is_secret = True
         db.add(row)
     else:
-        db.add(AppSetting(key=key, value_encrypted=encrypt_value(value), description=description))
+        db.add(AppSetting(key=key, value_encrypted=encrypt_value(value), description=description, is_secret=is_secret))
 
 
 # --------------------------------------------------------------------------
@@ -547,6 +552,49 @@ def usage_monitor(db: DbSession, admin: PlatformAdmin) -> list[UsageRow]:
             )
         )
     return rows
+
+
+@router.get("/settings/telegram", response_model=TelegramCredentialsResponse)
+def get_admin_telegram_credentials(
+    db: DbSession,
+    _: PlatformAdmin,
+) -> TelegramCredentialsResponse:
+    api_id = get_setting_value(db, "telegram_api_id") or ""
+    api_hash = get_setting_value(db, "telegram_api_hash") or ""
+    configured = bool(api_id and api_hash)
+    return TelegramCredentialsResponse(
+        api_id=api_id,
+        api_hash=api_hash,
+        configured=configured,
+    )
+
+
+@router.put("/settings/telegram", response_model=MessageResponse)
+def update_admin_telegram_credentials(
+    payload: TelegramCredentialsUpdate,
+    db: DbSession,
+    admin: PlatformAdmin,
+) -> MessageResponse:
+    api_id_str = payload.api_id.strip()
+    api_hash_str = payload.api_hash.strip()
+    if not api_id_str or not api_hash_str:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="يجب إدخال معرف API ID وتجزئة API Hash")
+    if not api_id_str.isdigit():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="معرف API ID يجب أن يكون أرقاماً فقط")
+
+    _set_setting(db, "telegram_api_id", api_id_str, "Telegram API ID", is_secret=True)
+    _set_setting(db, "telegram_api_hash", api_hash_str, "Telegram API Hash", is_secret=True)
+    db.commit()
+
+    write_audit_log(
+        db,
+        action="admin.settings.telegram",
+        message="تحديث بيانات Telegram API ID و API Hash للنظام بالكامل",
+        actor_user_id=admin.id,
+        entity_type="settings",
+        entity_id="telegram",
+    )
+    return MessageResponse(message="تم حفظ وتطبيق إعدادات API تيليجرام للنظام بالكامل")
 
 
 @router.post("/broadcast", response_model=MessageResponse)

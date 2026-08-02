@@ -219,7 +219,7 @@ def _run_add_loop(db: Session, run_id: str, users: list[dict[str, str]], target_
         api_id, api_hash = get_telegram_credentials(db)
     except ValueError as exc:
         _update_operation(db, operation_id, "failed", {})
-        raise ValueError("اضبط Telegram API ID و API Hash من الإعدادات أولاً") from exc
+        raise ValueError("يجب على مالك الموقع ضبط Telegram API ID و API Hash من لوحة الإدارة أولاً") from exc
 
     try:
         return asyncio.run(

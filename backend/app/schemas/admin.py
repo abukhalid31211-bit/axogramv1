@@ -136,3 +136,15 @@ class AdminLogEntry(BaseModel):
 class ModuleInfo(BaseModel):
     id: str
     label: str
+
+
+class TelegramCredentialsResponse(BaseModel):
+    api_id: str
+    api_hash: str
+    configured: bool
+
+
+class TelegramCredentialsUpdate(BaseModel):
+    api_id: str
+    api_hash: str
+
