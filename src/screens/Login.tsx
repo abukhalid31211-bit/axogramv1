@@ -30,7 +30,6 @@ export function LoginScreen() {
             <KeyRound className="h-8 w-8" />
           </div>
           <h1 className="text-2xl font-extrabold text-surface-800">تسجيل الدخول</h1>
-          <p className="mt-1 text-sm text-surface-500">نسخة Full Stack من Axogram Pro</p>
         </div>
 
         <div className="space-y-4">
@@ -52,10 +51,6 @@ export function LoginScreen() {
           >
             {loading ? "جاري الدخول..." : "دخول"}
           </Button>
-          <div className="rounded-xl border border-surface-200 bg-surface-50 px-4 py-3 text-xs text-surface-500">
-            الدخول بالبريد الإلكتروني المسجّل لدى الإدارة. حساب الإدارة الافتراضي:{" "}
-            <span className="font-bold text-surface-700">haidaralkarar20@gmail.com</span>
-          </div>
         </div>
       </div>
     </div>
