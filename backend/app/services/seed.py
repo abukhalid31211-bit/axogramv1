@@ -8,9 +8,13 @@ from app.core.security import get_password_hash
 from app.db.models import Account, AppSetting, Campaign, MessageTemplate, Plan, Proxy, User
 
 
+# NOTE: telegram_api_id / telegram_api_hash are intentionally NOT seeded here.
+# They are platform-owner credentials configured once from the admin panel
+# (لوحة الإدارة → 🔑 API تيليجرام) or via TELETHON_API_ID/TELETHON_API_HASH env
+# vars, and are then applied automatically to the whole system. Seeding fake
+# values used to make the system look "configured" while every Telegram call
+# failed.
 DEFAULT_SETTINGS = [
-    ("telegram_api_id", "12345678", True, "Telegram API ID"),
-    ("telegram_api_hash", "a1b2c3d4e5f6", True, "Telegram API Hash"),
     ("default_add_limit", "20", False, "Daily add limit"),
     ("default_gather_limit", "500", False, "Daily gather limit"),
     ("default_message_limit", "30", False, "Daily DM limit"),
@@ -137,6 +141,45 @@ def _ensure_default_plans(db: Session) -> None:
     db.commit()
 
 
+def _purge_placeholder_telegram_credentials(db: Session) -> None:
+    """Drop the old fake demo credentials from already-deployed databases.
+
+    Real credentials entered by the owner are always preserved — only the exact
+    legacy placeholder pair (12345678 / a1b2c3d4e5f6) is removed so the panel
+    honestly reports «غير مضبوط» instead of pretending to be configured.
+    """
+    from app.core.crypto import decrypt_value
+    from app.services.settings import (
+        PLACEHOLDER_API_HASH,
+        PLACEHOLDER_API_ID,
+        TELEGRAM_API_HASH_KEY,
+        TELEGRAM_API_ID_KEY,
+    )
+
+    rows = {
+        row.key: row
+        for row in db.query(AppSetting).filter(
+            AppSetting.key.in_([TELEGRAM_API_ID_KEY, TELEGRAM_API_HASH_KEY])
+        )
+    }
+    if not rows:
+        return
+
+    def _value(key: str) -> str:
+        row = rows.get(key)
+        if not row:
+            return ""
+        try:
+            return (decrypt_value(row.value_encrypted) or "").strip()
+        except Exception:
+            return ""
+
+    if _value(TELEGRAM_API_ID_KEY) == PLACEHOLDER_API_ID and _value(TELEGRAM_API_HASH_KEY) == PLACEHOLDER_API_HASH:
+        for row in rows.values():
+            db.delete(row)
+        db.commit()
+
+
 def ensure_initial_data(
     db: Session,
     *,
@@ -146,6 +189,7 @@ def ensure_initial_data(
 ) -> None:
     _ensure_platform_admin(db, superuser_username, superuser_password, superuser_full_name)
     _ensure_default_plans(db)
+    _purge_placeholder_telegram_credentials(db)
 
     for key, value, is_secret, description in DEFAULT_SETTINGS:
         if not db.query(AppSetting).filter(AppSetting.key == key).first():

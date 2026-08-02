@@ -10,6 +10,10 @@ class TelegramStatusResponse(BaseModel):
     has_api_id: bool
     has_api_hash: bool
     sessions_path: str
+    # Credentials are always owned/managed by the platform admin — subscribers
+    # never enter them. Kept explicit so the UI can render the right hint.
+    managed_by_admin: bool = True
+    message: str | None = None
 
 
 class TelegramRequestCodePayload(BaseModel):

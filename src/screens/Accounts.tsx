@@ -289,7 +289,14 @@ function AddAccount() {
         {mode === "telegram" && (
           <>
             {!telegramStatus?.configured && (
-              <Alert tone="warn" title="إعدادات تيليجرام غير مكتملة">اذهب إلى الإعدادات وضع Telegram API ID و API Hash أولاً قبل الربط الفعلي.</Alert>
+              <Alert tone="warn" title="ربط الحسابات غير مفعّل حالياً">
+                {telegramStatus?.message || "بيانات Telegram API تُضبط من إدارة المنصة — تواصل مع الإدارة لتفعيل ربط الحسابات."}
+              </Alert>
+            )}
+            {telegramStatus?.configured && otpStep === 1 && (
+              <Alert tone="info" title="لا تحتاج أي بيانات API">
+                أدخل رقم الهاتف فقط — بيانات API مضبوطة مسبقاً من إدارة المنصة وتُستخدم تلقائياً.
+              </Alert>
             )}
             {otpStep === 1 && (
               <div className="card p-6 space-y-4">
@@ -1070,7 +1077,7 @@ function ValidateAccounts() {
   const onJobDone = (run: any) => {
     setRunning(false);
     if (run.status === "failed") {
-      show(run.error?.split("\n")[0] || "فشل التحقق — تأكد من ضبط API ID/Hash ووجود جلسات", "danger");
+      show(run.error?.split("\n")[0] || "فشل التحقق — تأكد من وجود جلسات مرتبطة", "danger");
       return;
     }
     try {

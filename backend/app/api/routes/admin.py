@@ -34,6 +34,8 @@ from app.schemas.admin import (
     SubscriberCreate,
     SubscriberDetail,
     SubscriberPublic,
+    TelegramCredentialsPublic,
+    TelegramCredentialsUpdate,
     UsageRow,
 )
 from app.schemas.common import MessageResponse
@@ -669,3 +671,159 @@ def unlock_clients(db: DbSession, admin: PlatformAdmin) -> MessageResponse:
         entity_id="clients_locked",
     )
     return MessageResponse(message="تم فتح لوحة العملاء")
+
+
+# --------------------------------------------------------------------------
+# Platform Telegram API credentials (owner-managed, applied system-wide)
+# --------------------------------------------------------------------------
+
+def _mask_hash(value: str) -> str:
+    """Show only the first/last 4 characters of the API hash."""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "•" * len(value)
+    return f"{value[:4]}{'•' * max(4, len(value) - 8)}{value[-4:]}"
+
+
+def _telegram_credentials_public(db: Session) -> TelegramCredentialsPublic:
+    from app.services.settings import (
+        TELEGRAM_API_HASH_KEY,
+        TELEGRAM_API_ID_KEY,
+        resolve_telegram_credentials,
+    )
+
+    api_id, api_hash, source = resolve_telegram_credentials(db)
+    row = db.query(AppSetting).filter(AppSetting.key == TELEGRAM_API_HASH_KEY).first()
+    id_row = db.query(AppSetting).filter(AppSetting.key == TELEGRAM_API_ID_KEY).first()
+    updated_at = None
+    for candidate in (row, id_row):
+        if candidate and (updated_at is None or candidate.updated_at > updated_at):
+            updated_at = candidate.updated_at
+
+    if source == "database":
+        message = "مضبوط من لوحة الإدارة ويُطبَّق تلقائياً على كل المستخدمين والعمليات"
+    elif source == "environment":
+        message = "مأخوذ من متغيرات البيئة على السيرفر (TELETHON_API_ID / TELETHON_API_HASH) — يمكنك استبداله من هنا"
+    else:
+        message = "غير مضبوط — لن يتمكن أي مشترك من ربط حساب تيليجرام حتى تضبطه"
+
+    return TelegramCredentialsPublic(
+        configured=bool(api_id and api_hash),
+        source=source,
+        api_id=str(api_id) if api_id else None,
+        api_hash_masked=_mask_hash(api_hash or ""),
+        has_api_hash=bool(api_hash),
+        updated_at=updated_at,
+        accounts_linked=db.query(Account).filter(Account.session_file_path.isnot(None)).count(),
+        message=message,
+    )
+
+
+@router.get("/telegram-api", response_model=TelegramCredentialsPublic)
+def get_telegram_api(db: DbSession, admin: PlatformAdmin) -> TelegramCredentialsPublic:
+    """Read the platform-wide Telegram API credentials (owner only)."""
+    return _telegram_credentials_public(db)
+
+
+@router.put("/telegram-api", response_model=TelegramCredentialsPublic)
+def update_telegram_api(
+    payload: TelegramCredentialsUpdate,
+    db: DbSession,
+    admin: PlatformAdmin,
+) -> TelegramCredentialsPublic:
+    """Store the owner's Telegram API ID/Hash; applied instantly system-wide."""
+    from app.services.settings import (
+        PLACEHOLDER_API_HASH,
+        PLACEHOLDER_API_ID,
+        TELEGRAM_API_HASH_KEY,
+        TELEGRAM_API_ID_KEY,
+        get_setting_value,
+        set_setting_value,
+    )
+
+    api_id = (payload.api_id or "").strip()
+    if not api_id.isdigit() or int(api_id) <= 0:
+        raise HTTPException(status_code=422, detail="API ID يجب أن يكون رقماً صحيحاً موجباً")
+
+    api_hash = (payload.api_hash or "").strip()
+    if not api_hash:
+        # Keep the stored hash when the field is left empty (masked in the UI).
+        api_hash = (get_setting_value(db, TELEGRAM_API_HASH_KEY) or "").strip()
+        if not api_hash:
+            raise HTTPException(status_code=422, detail="أدخل API Hash")
+    if len(api_hash) < 8:
+        raise HTTPException(status_code=422, detail="API Hash غير صالح (قصير جداً)")
+    if api_id == PLACEHOLDER_API_ID and api_hash == PLACEHOLDER_API_HASH:
+        raise HTTPException(status_code=422, detail="هذه قيم تجريبية وليست بيانات حقيقية من my.telegram.org")
+
+    set_setting_value(
+        db,
+        TELEGRAM_API_ID_KEY,
+        api_id,
+        is_secret=True,
+        description="Telegram API ID (إدارة المنصة — يُطبَّق على كل النظام)",
+        commit=False,
+    )
+    set_setting_value(
+        db,
+        TELEGRAM_API_HASH_KEY,
+        api_hash,
+        is_secret=True,
+        description="Telegram API Hash (إدارة المنصة — يُطبَّق على كل النظام)",
+        commit=False,
+    )
+    db.commit()
+
+    write_audit_log(
+        db,
+        action="admin.telegram_api.update",
+        message=f"حدّث بيانات Telegram API للمنصة (API ID: {api_id}) — تُطبَّق على كل المشتركين",
+        actor_user_id=admin.id,
+        entity_type="settings",
+        entity_id="telegram_api",
+    )
+    return _telegram_credentials_public(db)
+
+
+@router.post("/telegram-api/test", response_model=MessageResponse)
+def test_telegram_api(db: DbSession, admin: PlatformAdmin) -> MessageResponse:
+    """Verify the stored credentials by connecting to Telegram (no login)."""
+    from app.services.settings import get_telegram_credentials
+
+    try:
+        api_id, api_hash = get_telegram_credentials(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        import asyncio
+
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+
+        async def _probe() -> None:
+            client = TelegramClient(StringSession(), api_id, api_hash, device_model="Axogram Pro")
+            await client.connect()
+            try:
+                # Any low-level request validates the api_id/api_hash pair.
+                from telethon.tl.functions.help import GetConfigRequest
+
+                await client(GetConfigRequest())
+            finally:
+                await client.disconnect()
+
+        asyncio.run(_probe())
+    except Exception as exc:  # noqa: BLE001 - surfaced to the admin as-is
+        raise HTTPException(status_code=400, detail=f"فشل الاتصال بتيليجرام: {exc}") from exc
+
+    write_audit_log(
+        db,
+        action="admin.telegram_api.test",
+        message="اختبر بيانات Telegram API للمنصة بنجاح",
+        actor_user_id=admin.id,
+        entity_type="settings",
+        entity_id="telegram_api",
+    )
+    return MessageResponse(message="✅ بيانات API صالحة والاتصال بتيليجرام ناجح")

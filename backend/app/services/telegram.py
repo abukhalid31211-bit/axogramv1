@@ -128,18 +128,27 @@ def build_client_for_account(db: Session, account: Account, api_id: int | None =
     return TelegramClient(str(real_path), api_id, api_hash, **_proxy_kwargs(proxy), device_model="Axogram Pro", app_version="1.0.0")
 
 
-def build_bot_client(token: str, api_id: int | None = None, api_hash: str | None = None) -> TelegramClient:
-    if api_id is None or api_hash is None:
-        try:
-            from app.core.config import get_settings as _gs
-
-            s = _gs()
-            api_id = int(s.telethon_api_id) if s.telethon_api_id else None
-            api_hash = s.telethon_api_hash
-        except Exception:
-            api_id, api_hash = None, None
+def build_bot_client(token: str, api_id: int | None = None, api_hash: str | None = None, db: Session | None = None) -> TelegramClient:
+    # Fall back to the platform-wide credentials (admin panel → env vars).
     if not api_id or not api_hash:
-        raise ValueError("API ID/Hash غير مضبوطين لإرسال إشعارات البوت")
+        if db is not None:
+            try:
+                api_id, api_hash = get_telegram_credentials(db)
+            except Exception:
+                api_id, api_hash = None, None
+        if not api_id or not api_hash:
+            try:
+                from app.core.config import get_settings as _gs
+
+                s = _gs()
+                api_id = int(s.telethon_api_id) if s.telethon_api_id else None
+                api_hash = s.telethon_api_hash
+            except Exception:
+                api_id, api_hash = None, None
+    if not api_id or not api_hash:
+        raise ValueError(
+            "لم يتم ضبط Telegram API ID و API Hash من إدارة المنصة بعد — تواصل مع الإدارة"
+        )
     return TelegramClient(StringSession(), int(api_id), api_hash, device_model="Axogram Notifier")
 
 

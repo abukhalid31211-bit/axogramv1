@@ -21,12 +21,19 @@ RESERVED_KEYS = {
     "admin_purge_last_run",
 }
 
+# Telegram credentials belong to the platform owner and are managed exclusively
+# from the admin panel (PUT /admin/telegram-api) so they apply to the whole
+# system — nobody edits them through the generic settings endpoint anymore.
+ADMIN_PANEL_ONLY_KEYS = {"telegram_api_id", "telegram_api_hash"}
+
 
 @router.get("", response_model=list[SettingPublic])
 def list_settings(db: DbSession, current_user: Annotated[User, Depends(require_module("settings"))]) -> list[SettingPublic]:
     rows = db.query(AppSetting).order_by(AppSetting.key.asc()).all()
     out: list[SettingPublic] = []
     for row in rows:
+        if row.key in ADMIN_PANEL_ONLY_KEYS:
+            continue  # owner credentials live in the admin panel only (masked there)
         if row.key in RESERVED_KEYS and not is_platform_admin(current_user):
             continue  # platform-level credentials are never shown to subscribers
         out.append(
@@ -48,6 +55,10 @@ def upsert_settings(
     current_user: Annotated[User, Depends(require_module("settings"))],
 ) -> MessageResponse:
     for item in payload.items:
+        if item.key in ADMIN_PANEL_ONLY_KEYS:
+            # Silently ignore: older clients may still post these keys in a bulk
+            # save. The single source of truth is the admin panel endpoint.
+            continue
         if item.key in RESERVED_KEYS and not is_platform_admin(current_user):
             raise HTTPException(
                 status_code=403,

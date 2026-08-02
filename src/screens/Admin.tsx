@@ -10,7 +10,8 @@ import {
 import {
   apiFetch, downloadApiFile,
   type AdminLogEntry, type AdminModuleInfo, type AdminStats,
-  type PlanRecord, type SubscriberDetail, type SubscriberRecord, type UsageRow,
+  type PlanRecord, type SubscriberDetail, type SubscriberRecord,
+  type TelegramApiCredentials, type UsageRow,
 } from "../lib/api";
 
 // ---------------------------------------------------------------------------
@@ -154,6 +155,7 @@ export function AdminScreen({ sub, param }: { sub?: string; param?: string }) {
     ...(selectedId != null ? [{ id: "card", label: "👤 بطاقة المشترك" }] : []),
     { id: "plans", label: "💎 الباقات" },
     { id: "usage", label: "📊 مراقبة الاستخدام" },
+    { id: "telegram-api", label: "🔑 API تيليجرام" },
     { id: "broadcast", label: "📢 بثّ إشعار" },
     { id: "logs", label: "🧾 سجل العمليات" },
     { id: "emergency", label: "🚨 طوارئ" },
@@ -200,6 +202,7 @@ export function AdminScreen({ sub, param }: { sub?: string; param?: string }) {
       )}
       {tab === "plans" && <PlansTab modules={modules} />}
       {tab === "usage" && <UsageTab />}
+      {tab === "telegram-api" && <TelegramApiTab />}
       {tab === "broadcast" && <BroadcastTab />}
       {tab === "logs" && <LogsTab />}
       {tab === "emergency" && <EmergencyTab />}
@@ -1037,7 +1040,166 @@ function UsageTab() {
 }
 
 // ---------------------------------------------------------------------------
-// 6) Broadcast
+// 6) Platform Telegram API credentials (owner-managed, applied system-wide)
+// ---------------------------------------------------------------------------
+
+function TelegramApiTab() {
+  const toast = useToast();
+  const [info, setInfo] = useState<TelegramApiCredentials | null>(null);
+  const [apiId, setApiId] = useState("");
+  const [apiHash, setApiHash] = useState("");
+  const [showHash, setShowHash] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [confirmSave, setConfirmSave] = useState(false);
+
+  const load = useCallback(() => {
+    apiFetch<TelegramApiCredentials>("/admin/telegram-api")
+      .then((data) => {
+        setInfo(data);
+        setApiId(data.api_id ?? "");
+        setApiHash("");
+      })
+      .catch((e) => toast.show(e instanceof Error ? e.message : "تعذر التحميل", "danger"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => load(), [load]);
+
+  const save = async () => {
+    setConfirmSave(false);
+    const cleanId = apiId.trim();
+    if (!/^\d+$/.test(cleanId)) {
+      toast.show("API ID يجب أن يكون أرقاماً فقط", "danger");
+      return;
+    }
+    if (!info?.has_api_hash && !apiHash.trim()) {
+      toast.show("أدخل API Hash", "danger");
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await apiFetch<TelegramApiCredentials>("/admin/telegram-api", {
+        method: "PUT",
+        body: JSON.stringify({ api_id: cleanId, api_hash: apiHash.trim() || null }),
+      });
+      setInfo(updated);
+      setApiId(updated.api_id ?? "");
+      setApiHash("");
+      toast.show("✅ تم الحفظ — طُبِّق فوراً على كل المشتركين والعمليات");
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "فشل الحفظ", "danger");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const runTest = async () => {
+    setTesting(true);
+    try {
+      const res = await apiFetch<{ message: string }>("/admin/telegram-api/test", { method: "POST" });
+      toast.show(res.message);
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "فشل الاختبار", "danger");
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  if (!info) return <Spinner label="جاري تحميل بيانات API..." />;
+
+  const sourceLabel =
+    info.source === "database" ? "🗄️ محفوظ في قاعدة البيانات (مشفّر)" :
+    info.source === "environment" ? "🖥️ متغيرات البيئة على السيرفر" : "—";
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-4">
+      <Alert tone={info.configured ? "success" : "warn"} title={info.configured ? "بيانات API مضبوطة ومفعّلة على كامل النظام" : "بيانات API غير مضبوطة بعد"}>
+        {info.message}
+      </Alert>
+
+      <div className="card space-y-4 p-5">
+        <SectionTitle icon={<KeyRound className="h-4 w-4" />}>بيانات تطبيق تيليجرام (تخص المنصة وحدها)</SectionTitle>
+
+        <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+          <div className="rounded-xl border border-surface-200 bg-surface-50 px-3 py-2">
+            <div className="text-surface-500">الحالة</div>
+            <div className={`font-bold ${info.configured ? "text-brand-600" : "text-danger-600"}`}>{info.configured ? "🟢 مفعّل" : "🔴 غير مضبوط"}</div>
+          </div>
+          <div className="rounded-xl border border-surface-200 bg-surface-50 px-3 py-2">
+            <div className="text-surface-500">المصدر</div>
+            <div className="font-bold text-surface-800">{sourceLabel}</div>
+          </div>
+          <div className="rounded-xl border border-surface-200 bg-surface-50 px-3 py-2">
+            <div className="text-surface-500">حسابات مرتبطة</div>
+            <div className="font-bold text-surface-800">{info.accounts_linked}</div>
+          </div>
+          <div className="rounded-xl border border-surface-200 bg-surface-50 px-3 py-2">
+            <div className="text-surface-500">آخر تحديث</div>
+            <div className="font-bold text-surface-800">{info.updated_at ? formatDate(info.updated_at) : "—"}</div>
+          </div>
+        </div>
+
+        <Field label="API ID" type="number" value={apiId} onChange={setApiId} placeholder="20481953" hint="أرقام فقط — من my.telegram.org ← API Development Tools" />
+
+        <div>
+          <label className="label">API Hash</label>
+          <div className="relative">
+            <input
+              type={showHash ? "text" : "password"}
+              value={apiHash}
+              onChange={(e) => setApiHash(e.target.value)}
+              placeholder={info.has_api_hash ? `المحفوظ حالياً: ${info.api_hash_masked} — اتركه فارغاً للإبقاء عليه` : "9f1c2b3a4d5e6f708192a3b4c5d6e7f8"}
+              className="field pl-16"
+              dir="ltr"
+            />
+            <button
+              type="button"
+              onClick={() => setShowHash((v) => !v)}
+              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-lg bg-surface-100 px-2 py-1 text-xs font-bold text-surface-600 transition hover:bg-surface-200"
+            >
+              {showHash ? "إخفاء" : "إظهار"}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-surface-500">
+            {info.has_api_hash ? "الهاش المحفوظ مُشفَّر ولا يُعرض كاملاً — اتركه فارغاً إن أردت تغيير الـ API ID فقط." : "يُخزَّن مشفّراً ولن يظهر كاملاً بعد الحفظ."}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button variant="primary" className="flex-1" disabled={saving} onClick={() => (info.configured ? setConfirmSave(true) : void save())}>
+            {saving ? "جاري الحفظ..." : "💾 حفظ وتطبيق على النظام"}
+          </Button>
+          <Button icon={<RefreshCw className="h-4 w-4" />} disabled={testing || !info.configured} onClick={() => void runTest()}>
+            {testing ? "جاري الاختبار..." : "🔍 اختبار الاتصال"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="card space-y-2 p-5 text-xs leading-relaxed text-surface-600">
+        <SectionTitle>كيف يعمل هذا؟</SectionTitle>
+        <p>• هذه بيانات <span className="font-bold text-surface-800">تطبيقك أنت</span> كمالك المنصة، وليست بيانات المشتركين.</p>
+        <p>• تُضبط من هنا مرة واحدة، ثم تُستخدم تلقائياً في: ربط الحسابات بالـ OTP، التجميع، الإضافة، الرسائل، الحملات، أدوات الأمان، والمهام المجدولة.</p>
+        <p>• المشترك <span className="font-bold text-surface-800">لا يراها ولا يُطلب منه إدخالها أبداً</span> — حتى لو أخفيت عنه وحدة «الإعدادات» بالكامل، يبقى ربط الحسابات يعمل بشكل طبيعي.</p>
+        <p>• تُخزَّن مشفّرة في قاعدة البيانات، ولا يصل إليها أي مستخدم آخر عبر الـ API.</p>
+        <p>• بديل اختياري للسيرفر: متغيرا البيئة <code className="rounded bg-surface-100 px-1" dir="ltr">TELETHON_API_ID</code> و <code className="rounded bg-surface-100 px-1" dir="ltr">TELETHON_API_HASH</code> — وما تحفظه هنا له الأولوية عليهما.</p>
+      </div>
+
+      <ConfirmDialog
+        open={confirmSave}
+        title="تغيير بيانات API للمنصة؟"
+        message="سيُطبَّق التغيير فوراً على كل المشتركين والعمليات. الجلسات المرتبطة سابقاً بـ API ID مختلف قد تحتاج إعادة ربط. متابعة؟"
+        confirmLabel="حفظ وتطبيق"
+        onCancel={() => setConfirmSave(false)}
+        onConfirm={() => void save()}
+      />
+      {toast.node}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 7) Broadcast
 // ---------------------------------------------------------------------------
 
 function BroadcastTab() {
@@ -1101,7 +1263,7 @@ function BroadcastTab() {
 }
 
 // ---------------------------------------------------------------------------
-// 7) Admin logs
+// 8) Admin logs
 // ---------------------------------------------------------------------------
 
 function LogsTab() {
@@ -1184,7 +1346,7 @@ function LogsTab() {
 }
 
 // ---------------------------------------------------------------------------
-// 8) Emergency
+// 9) Emergency
 // ---------------------------------------------------------------------------
 
 function EmergencyTab() {

@@ -88,7 +88,7 @@ def deliver_event(db: Session, event_id: int) -> bool:
     try:
         if bot_token:
             api_id, api_hash = _api_credentials(db)
-            client = build_bot_client(bot_token, api_id, api_hash)
+            client = build_bot_client(bot_token, api_id, api_hash, db=db)
             asyncio_run_connect(client, lambda: client.send_message(parse_username(target), text))
         else:
             if not account_phone:

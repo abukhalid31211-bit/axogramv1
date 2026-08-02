@@ -136,3 +136,24 @@ class AdminLogEntry(BaseModel):
 class ModuleInfo(BaseModel):
     id: str
     label: str
+
+
+# --------------------------------------------------------------------------
+# Platform Telegram API credentials (owner-managed, applied system-wide)
+# --------------------------------------------------------------------------
+
+class TelegramCredentialsPublic(BaseModel):
+    configured: bool = False
+    source: str = "none"  # database | environment | none
+    api_id: str | None = None
+    api_hash_masked: str | None = None
+    has_api_hash: bool = False
+    updated_at: datetime | None = None
+    accounts_linked: int = 0
+    message: str | None = None
+
+
+class TelegramCredentialsUpdate(BaseModel):
+    api_id: str = Field(min_length=1)
+    # Leave empty to keep the currently stored hash untouched.
+    api_hash: str | None = None

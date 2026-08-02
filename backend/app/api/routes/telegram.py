@@ -17,7 +17,7 @@ from app.schemas.telegram import (
     TelegramVerifyCodeResponse,
 )
 from app.services.audit import write_audit_log
-from app.services.settings import get_setting_value, get_telegram_credentials
+from app.services.settings import get_telegram_credentials, resolve_telegram_credentials
 from app.services.subscription import is_platform_admin, quota_error
 from app.services.telegram_auth import build_client, phone_to_session_path
 
@@ -26,13 +26,28 @@ router = APIRouter(prefix="/telegram", tags=["telegram"], dependencies=[Depends(
 
 @router.get("/status", response_model=TelegramStatusResponse)
 def telegram_status(db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> TelegramStatusResponse:
-    api_id = get_setting_value(db, "telegram_api_id")
-    api_hash = get_setting_value(db, "telegram_api_hash")
+    """Whether the platform owner configured the shared Telegram API credentials.
+
+    Subscribers never provide API ID/Hash themselves — they only need to know
+    whether linking accounts is possible right now.
+    """
+    api_id, api_hash, _source = resolve_telegram_credentials(db)
+    configured = bool(api_id and api_hash)
     return TelegramStatusResponse(
-        configured=bool(api_id and api_hash),
+        configured=configured,
         has_api_id=bool(api_id),
         has_api_hash=bool(api_hash),
         sessions_path=str(phone_to_session_path("sample").parent),
+        managed_by_admin=True,
+        message=(
+            None
+            if configured
+            else (
+                "بيانات Telegram API تُضبط من إدارة المنصة — تواصل مع الإدارة لتفعيل ربط الحسابات"
+                if not is_platform_admin(current_user)
+                else "اضبط Telegram API ID و API Hash من لوحة الإدارة → 🔑 API تيليجرام"
+            )
+        ),
     )
 
 
@@ -51,7 +66,7 @@ async def request_code(
     try:
         api_id, api_hash = get_telegram_credentials(db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="يجب ضبط Telegram API ID و API Hash من الإعدادات أولاً") from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     client = build_client(payload.phone, api_id, api_hash)
     try:
@@ -94,7 +109,7 @@ async def verify_code(
     try:
         api_id, api_hash = get_telegram_credentials(db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="يجب ضبط Telegram API ID و API Hash من الإعدادات أولاً") from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     auth_session = (
         db.query(TelegramAuthSession)

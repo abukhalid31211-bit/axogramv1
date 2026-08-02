@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Settings, KeyRound, Save, RotateCcw, Folder, Sliders, Bell, ShieldCheck, Globe, Database, FileText, CalendarClock, Lock, Archive, Cpu, Info, Server } from "lucide-react";
 import { useNav } from "../nav";
+import { useAuth } from "../auth";
 import { Alert, Button, Checkbox, PageHeader, SectionTitle, useToast, InlineEdit, Field, OptionButton, Progress, ConfirmDialog, Table, StatCard, Spinner } from "../ui";
-import { apiFetch, downloadApiFile, type SettingItem } from "../lib/api";
+import { apiFetch, downloadApiFile, type SettingItem, type TelegramStatus } from "../lib/api";
 
 type SettingsMap = Record<string, string>;
 
+// NOTE: telegram_api_id / telegram_api_hash intentionally live only in the
+// admin panel (لوحة الإدارة → 🔑 API تيليجرام). They belong to the platform
+// owner and are applied system-wide, so no user ever types them here.
 const fallbackSettings: SettingsMap = {
-  telegram_api_id: "12345678",
-  telegram_api_hash: "a1b2c3d4e5f6",
   default_add_limit: "20",
   default_gather_limit: "500",
   default_message_limit: "30",
@@ -29,8 +31,6 @@ const fallbackSettings: SettingsMap = {
 };
 
 const descriptions: Record<string, { is_secret: boolean; description: string }> = {
-  telegram_api_id: { is_secret: true, description: "Telegram API ID" },
-  telegram_api_hash: { is_secret: true, description: "Telegram API Hash" },
   default_add_limit: { is_secret: false, description: "Daily add limit" },
   default_gather_limit: { is_secret: false, description: "Daily gather limit" },
   default_message_limit: { is_secret: false, description: "Daily message limit" },
@@ -108,7 +108,7 @@ function saveSetting(key: string, value: string, show: (msg: string, tone?: "dan
 export function SettingsModule() {
   const { push } = useNav();
   const items = [
-    { id: "api",    label: "إعدادات API تيليجرام", desc: "API ID و Hash", icon: KeyRound },
+    { id: "api",    label: "API تيليجرام", desc: "حالة الاتصال — تُدار من الإدارة", icon: KeyRound },
     { id: "limits", label: "الحدود الافتراضية",    desc: "حدود يومية وتأخير", icon: Sliders },
     { id: "storage",label: "مسارات التخزين",       desc: "مجلدات الجلسات والملفات", icon: Folder },
     { id: "notifications", label: "إعدادات الإشعارات", desc: "تنبيهات وتقارير", icon: Bell },
@@ -185,22 +185,57 @@ function useScreenSettings() {
   return { ...s, handleSave };
 }
 
+/**
+ * Read-only status screen. API ID/Hash belong to the platform owner and are
+ * configured once from the admin panel, then applied automatically to the whole
+ * system — users never enter them, and linking accounts keeps working even when
+ * this whole «الإعدادات» module is hidden from their plan.
+ */
 function ApiSettings() {
   const { push } = useNav();
-  const { node } = useToast();
-  const s = useScreenSettings();
+  const { user } = useAuth();
+  const [status, setStatus] = useState<TelegramStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    apiFetch<TelegramStatus>("/telegram/status")
+      .then((data) => { if (mounted) setStatus(data); })
+      .catch(() => { if (mounted) setStatus(null); })
+      .finally(() => { if (mounted) setLoading(false); });
+    return () => { mounted = false; };
+  }, []);
+
   return (
     <div className="animate-fade">
-      <PageHeader title="إعدادات API تيليجرام" icon={<KeyRound className="h-5 w-5" />} />
-      {s.loading ? <Spinner label="جاري التحميل..." /> : (
+      <PageHeader title="API تيليجرام" subtitle="تُدار مركزياً من إدارة المنصة" icon={<KeyRound className="h-5 w-5" />} />
+      {loading ? <Spinner label="جاري التحميل..." /> : (
         <div className="mx-auto max-w-lg card p-6 space-y-4">
-          <Alert tone="info" title="هذه بيانات التطبيق — تُضبط مرة واحدة">يمكنك الحصول عليها من my.telegram.org → API Development Tools.</Alert>
-          <InlineEdit label="معرف API (API ID)" value={s.form.telegram_api_id} onSave={(v) => s.set("telegram_api_id", v)} placeholder="12345678" />
-          <InlineEdit label="تجزئة API (API Hash)" value={s.form.telegram_api_hash} onSave={(v) => s.set("telegram_api_hash", v)} placeholder="a1b2c3d4e5f6" />
-          <SaveBar onSave={() => void s.handleSave()} saving={s.saving} onBack={() => push(["settings"])} />
+          {status?.configured ? (
+            <Alert tone="success" title="🟢 بيانات API مضبوطة ومفعّلة">
+              النظام جاهز — يمكنك ربط الحسابات عبر OTP مباشرة من «مدير الحسابات» دون إدخال أي بيانات API.
+            </Alert>
+          ) : (
+            <Alert tone="warn" title="🔴 بيانات API غير مضبوطة بعد">
+              {status?.message || "تُضبط بيانات API من إدارة المنصة — تواصل مع الإدارة لتفعيل ربط الحسابات."}
+            </Alert>
+          )}
+
+          <div className="rounded-xl border border-surface-200 bg-surface-50 p-4 text-xs leading-relaxed text-surface-600 space-y-1.5">
+            <p>🔒 معرّف API وتجزئة API هما بيانات <span className="font-bold text-surface-800">التطبيق نفسه</span>، وليست بيانات حسابك.</p>
+            <p>✅ يضبطهما مالك المنصة مرة واحدة، ثم يُطبَّقان تلقائياً على كل العمليات: ربط الحسابات، التجميع، الإضافة، الرسائل والحملات.</p>
+            <p>✋ لن يُطلب منك إدخالهما في أي شاشة — إن ظهرت رسالة بعدم الضبط فتواصل مع الإدارة فقط.</p>
+          </div>
+
+          {user?.platform_admin && (
+            <Button variant="primary" className="w-full" onClick={() => push(["admin", "telegram-api"])}>
+              👑 الذهاب إلى لوحة الإدارة لضبط بيانات API
+            </Button>
+          )}
+
+          <Button className="w-full" onClick={() => push(["settings"])}>رجوع</Button>
         </div>
       )}
-      {node}
     </div>
   );
 }

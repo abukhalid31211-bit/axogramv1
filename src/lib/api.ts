@@ -138,6 +138,21 @@ export type TelegramStatus = {
   has_api_id: boolean;
   has_api_hash: boolean;
   sessions_path: string;
+  /** Credentials are always set by the platform owner — users never type them. */
+  managed_by_admin?: boolean;
+  message?: string | null;
+};
+
+/** Platform-wide Telegram API credentials (admin panel only). */
+export type TelegramApiCredentials = {
+  configured: boolean;
+  source: "database" | "environment" | "none";
+  api_id?: string | null;
+  api_hash_masked?: string | null;
+  has_api_hash: boolean;
+  updated_at?: string | null;
+  accounts_linked: number;
+  message?: string | null;
 };
 
 export type TelegramRequestCodeResponse = {
