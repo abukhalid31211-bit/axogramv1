@@ -29,10 +29,16 @@ def list_settings(db: DbSession, current_user: Annotated[User, Depends(require_m
     for row in rows:
         if row.key in RESERVED_KEYS and not is_platform_admin(current_user):
             continue  # platform-level credentials are never shown to subscribers
+        try:
+            plain = decrypt_value(row.value_encrypted)
+        except Exception:
+            # If decryption fails (e.g., key rotated or corrupted row), skip the secret value
+            # and return empty string so UI لا يعلق في وضع التحميل.
+            plain = ""
         out.append(
             SettingPublic(
                 key=row.key,
-                value=decrypt_value(row.value_encrypted),
+                value=plain,
                 is_secret=row.is_secret,
                 description=row.description,
                 updated_at=row.updated_at,

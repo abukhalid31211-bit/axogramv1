@@ -63,15 +63,18 @@ function useSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
+    setError(null);
     apiFetch<SettingItem[]>("/settings")
       .then((items) => { if (mounted) setForm(itemsToMap(items)); })
       .catch((err) => { if (mounted) setError(err instanceof Error ? err.message : "تعذر تحميل الإعدادات"); })
       .finally(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
-  }, []);
+  }, [reloadKey]);
 
   const payload = useMemo(() => ({
     items: Object.entries(form).map(([key, value]) => ({
@@ -97,7 +100,7 @@ function useSettings() {
 
   const set = (key: string, value: string) => setForm((s) => ({ ...s, [key]: value }));
 
-  return { form, set, setForm, loading, saving, error, save, resetDefaults: () => setForm(fallbackSettings) };
+  return { form, set, setForm, loading, saving, error, save, reload: () => setReloadKey((k) => k + 1), resetDefaults: () => setForm(fallbackSettings) };
 }
 
 function saveSetting(key: string, value: string, show: (msg: string, tone?: "danger" | "success") => void) {
@@ -192,11 +195,18 @@ function ApiSettings() {
   return (
     <div className="animate-fade">
       <PageHeader title="إعدادات API تيليجرام" icon={<KeyRound className="h-5 w-5" />} />
-      {s.loading ? <Spinner label="جاري التحميل..." /> : (
+      {s.loading ? <Spinner label="جاري التحميل..." /> : s.error ? (
+        <div className="mx-auto max-w-lg card p-6 space-y-3">
+          <Alert tone="danger" title="تعذر تحميل الإعدادات">{s.error}</Alert>
+          <Button variant="primary" className="w-full" onClick={() => s.reload()}>🔄 إعادة المحاولة</Button>
+          <SaveBar onBack={() => push(["settings"])} />
+        </div>
+      ) : (
         <div className="mx-auto max-w-lg card p-6 space-y-4">
           <Alert tone="info" title="هذه بيانات التطبيق للنظام بالكامل — تُضبط مرة واحدة">تُطبق Telegram API ID و API Hash على جميع المشتركين والحسابات في النظام. يمكنك أيضاً ضبطها مباشرة من لوحة الإدارة (أو من هنا إذا كنت الإدارة).</Alert>
           <InlineEdit label="معرف API (API ID)" value={s.form.telegram_api_id} onSave={(v) => s.set("telegram_api_id", v)} placeholder="12345678" />
           <InlineEdit label="تجزئة API (API Hash)" value={s.form.telegram_api_hash} onSave={(v) => s.set("telegram_api_hash", v)} placeholder="a1b2c3d4e5f6" />
+          {s.error && <Alert tone="danger">{s.error}</Alert>}
           <SaveBar onSave={() => void s.handleSave()} saving={s.saving} onBack={() => push(["settings"])} />
         </div>
       )}
@@ -212,7 +222,13 @@ function LimitsSettings() {
   return (
     <div className="animate-fade">
       <PageHeader title="الحدود الافتراضية" icon={<Sliders className="h-5 w-5" />} />
-      {s.loading ? <Spinner label="جاري التحميل..." /> : (
+      {s.loading ? <Spinner label="جاري التحميل..." /> : s.error ? (
+        <div className="mx-auto max-w-lg card p-6 space-y-3">
+          <Alert tone="danger" title="تعذر تحميل الإعدادات">{s.error}</Alert>
+          <Button variant="primary" className="w-full" onClick={() => s.reload()}>🔄 إعادة المحاولة</Button>
+          <SaveBar onBack={() => push(["settings"])} />
+        </div>
+      ) : (
         <div className="mx-auto max-w-lg card p-6 space-y-3">
           <InlineEdit label="حد الإضافة اليومي/حساب" value={s.form.default_add_limit} onSave={(v) => s.set("default_add_limit", v)} placeholder="20" />
           <InlineEdit label="حد التجميع اليومي/حساب" value={s.form.default_gather_limit} onSave={(v) => s.set("default_gather_limit", v)} placeholder="500" />
@@ -240,7 +256,13 @@ function StorageSettings() {
   return (
     <div className="animate-fade">
       <PageHeader title="مسارات التخزين" icon={<Folder className="h-5 w-5" />} />
-      {s.loading ? <Spinner label="جاري التحميل..." /> : (
+      {s.loading ? <Spinner label="جاري التحميل..." /> : s.error ? (
+        <div className="mx-auto max-w-lg card p-6 space-y-3">
+          <Alert tone="danger" title="تعذر تحميل الإعدادات">{s.error}</Alert>
+          <Button variant="primary" className="w-full" onClick={() => s.reload()}>🔄 إعادة المحاولة</Button>
+          <SaveBar onBack={() => push(["settings"])} />
+        </div>
+      ) : (
         <div className="mx-auto max-w-lg card p-6 space-y-3">
           <InlineEdit label="مجلد الجلسات" value={s.form.sessions_path} onSave={(v) => s.set("sessions_path", v)} placeholder="./sessions/" />
           <InlineEdit label="مجلد الملفات المصدرة" value={s.form.exports_path} onSave={(v) => s.set("exports_path", v)} placeholder="./exports/" />

@@ -1,4 +1,4 @@
-import { type ReactNode, useState, useRef, useEffect } from "react";
+import { type ReactNode, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
   ChevronLeft, Home, Check, X, AlertTriangle, Info, Loader2, Search, Pencil, Trash2,
 } from "lucide-react";
@@ -227,7 +227,17 @@ export function ConfirmDialog({ open, title, message, confirmLabel="تأكيد",
 
 export function useToast() {
   const [msg, setMsg] = useState<{ text: string; tone: "success"|"danger"|"info" } | null>(null);
-  const show = (text: string, tone: "success"|"danger"|"info" = "success") => { setMsg({ text, tone }); setTimeout(() => setMsg(null), 2600); };
+  const timerRef = useRef<number | null>(null);
+  const show = useCallback((text: string, tone: "success"|"danger"|"info" = "success") => {
+    setMsg({ text, tone });
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setMsg(null), 2600) as unknown as number;
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    };
+  }, []);
   const node = msg ? (
     <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 animate-fade pointer-events-none">
       <div className={`flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm shadow-pop ${
@@ -238,7 +248,7 @@ export function useToast() {
       </div>
     </div>
   ) : null;
-  return { show, node };
+  return useMemo(() => ({ show, node }), [show, node]);
 }
 
 export function SearchInput({ value, onChange, placeholder = "بحث..." }: { value: string; onChange: (v: string) => void; placeholder?: string; }) {

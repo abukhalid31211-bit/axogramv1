@@ -1049,18 +1049,25 @@ function ApiTab() {
   const [apiId, setApiId] = useState("");
   const [apiHash, setApiHash] = useState("");
   const [configured, setConfigured] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
+    setError(null);
     apiFetch<{ api_id: string; api_hash: string; configured: boolean }>("/admin/settings/telegram")
       .then((data) => {
         setApiId(data.api_id || "");
         setApiHash(data.api_hash || "");
         setConfigured(Boolean(data.configured));
       })
-      .catch((err) => toast.show(err instanceof Error ? err.message : "تعذر تحميل إعدادات API", "danger"))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : "تعذر تحميل إعدادات API";
+        setError(msg);
+        toast.show(msg, "danger");
+      })
       .finally(() => setLoading(false));
-  }, [toast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     load();
@@ -1093,6 +1100,11 @@ function ApiTab() {
       </Alert>
       {loading ? (
         <Spinner label="جاري تحميل إعدادات API..." />
+      ) : error ? (
+        <div className="card space-y-3 p-6">
+          <Alert tone="danger" title="تعذر تحميل إعدادات API">{error}</Alert>
+          <Button variant="primary" className="w-full" onClick={load}>🔄 إعادة المحاولة</Button>
+        </div>
       ) : (
         <div className="card space-y-4 p-6">
           <SectionTitle icon={<KeyRound className="h-4 w-4" />}>
