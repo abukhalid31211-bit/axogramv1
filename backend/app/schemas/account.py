@@ -46,7 +46,7 @@ class AccountPublic(AccountBase):
     add_count: int = 0
     dm_count: int = 0
     flood_waits_count: int = 0
-    telegram_created_at: str | None = None
+    telegram_created_at: datetime | None = None
     data_center: str | None = None
     device_model: str | None = None
     last_used_at: datetime | None = None
