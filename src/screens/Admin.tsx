@@ -1060,7 +1060,10 @@ function ApiTab() {
       })
       .catch((err) => toast.show(err instanceof Error ? err.message : "تعذر تحميل إعدادات API", "danger"))
       .finally(() => setLoading(false));
-  }, [toast]);
+    // لا نضيف كائن toast ضمن الاعتمادات لأنه يُنشأ من جديد مع كل render،
+    // وهذا كان يعيد تشغيل التحميل باستمرار ويترك تبويب API عالقاً على شاشة التحميل.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     load();
