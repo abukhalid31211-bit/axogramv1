@@ -288,16 +288,13 @@ function AddAccount() {
 
         {mode === "telegram" && (
           <>
-            {!telegramStatus?.configured && (
-              <Alert tone="warn" title="إعدادات تيليجرام غير مكتملة">لم يتم ضبط Telegram API ID و API Hash بعد في النظام. يرجى من مالك الموقع (الإدارة) ضبطها من لوحة الإدارة أولاً قبل ربط الحسابات.</Alert>
-            )}
             {otpStep === 1 && (
               <div className="card p-6 space-y-4">
                 <SectionTitle icon={<Phone className="h-4 w-4" />}>الخطوة 1 — طلب رمز التحقق</SectionTitle>
-                <Field label="رقم الهاتف" value={otpPhone} onChange={setOtpPhone} placeholder="+9665XXXXXXXX" />
-                <div className="text-xs text-surface-500">سيتم إرسال OTP عبر Telethon من السيرفر وتخزين الجلسة داخل مجلد sessions.</div>
+                <Field label="رقم الهاتف" value={otpPhone} onChange={setOtpPhone} placeholder="+9665XXXXXXXX" hint="أدخل رقم الهاتف مع رمز الدولة" />
+                <div className="text-xs text-surface-500">أدخل رقم الهاتف مع رمز الدولة لإرسال رمز التحقق (OTP).</div>
                 <div className="flex gap-2">
-                  <Button variant="primary" className="flex-1" disabled={!otpPhone || otpLoading || !telegramStatus?.configured} onClick={() => void requestCode()}>{otpLoading ? "جاري الإرسال..." : "إرسال OTP"}</Button>
+                  <Button variant="primary" className="flex-1" disabled={!otpPhone || otpLoading} onClick={() => void requestCode()}>{otpLoading ? "جاري الإرسال..." : "إرسال OTP"}</Button>
                   <Button onClick={() => push(["accounts"])}>إلغاء</Button>
                 </div>
               </div>
@@ -1070,7 +1067,7 @@ function ValidateAccounts() {
   const onJobDone = (run: any) => {
     setRunning(false);
     if (run.status === "failed") {
-      show(run.error?.split("\n")[0] || "فشل التحقق — تأكد من ضبط API ID/Hash ووجود جلسات", "danger");
+      show(run.error?.split("\n")[0] || "فشل التحقق — تأكد من وجود جلسات نشطة", "danger");
       return;
     }
     try {
@@ -1169,7 +1166,7 @@ function WarmupAccounts() {
   const onJobDone = (run: any) => {
     setRunning(false);
     if (run.status === "failed") {
-      show(run.error?.split("\n")[0] || "فشل التسخين — تأكد من الجلسات وضبط API", "danger");
+      show(run.error?.split("\n")[0] || "فشل التسخين — تأكد من حالة الجلسات", "danger");
       return;
     }
     try {
@@ -1756,7 +1753,7 @@ function AccountSecurity() {
       const rows = await apiFetch<Array<{ hash: string; device: string; app: string; ip: string; last_active: string; current?: boolean }>>(`/accounts/${accountId}/telegram-sessions`);
       setDevices(rows);
     } catch (err) {
-      show(err instanceof Error ? err.message : "تعذر جلب الأجهزة — تحقق من الجلسة وضبط API", "danger");
+      show(err instanceof Error ? err.message : "تعذر جلب الأجهزة — تحقق من حالة الجلسة", "danger");
     } finally {
       setDevicesLoading(false);
     }
