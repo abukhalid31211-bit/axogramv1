@@ -35,9 +35,11 @@ def _exports_dir() -> Path:
     return path
 
 
-def _write_csv(file_path: Path, rows: list[dict[str, str]]) -> None:
+def _write_csv(file_path: Path, rows: list[dict[str, str]], fieldnames: list[str] | None = None) -> None:
+    if not fieldnames:
+        fieldnames = ["user_id", "first_name", "username", "phone", "last_seen"]
     with file_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["user_id", "first_name", "username", "phone", "last_seen"])
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(rows)
 
@@ -220,11 +222,56 @@ def gather_extract_run(run_id: str, payload: dict) -> dict:
         if not rows:
             raise ValueError("لم يتم العثور على أي أعضاء (تحقق من صلاحيات الحساب أو الفلاتر المحددة)")
 
+        # Apply filters if passed
+        filters = payload.get("filters")
+        if filters and rows:
+            filtered_rows = []
+            import re
+            arabic_re = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]')
+            for row in rows:
+                if filters.get("bots") and (row.get("username") or "").lower().endswith("bot"):
+                    continue
+                if filters.get("deleted") and any(x in (row.get("first_name") or "").lower() for x in ("deleted", "محذوف")):
+                    continue
+                if filters.get("noUser") and not row.get("username"):
+                    continue
+                if filters.get("phone") and not row.get("phone"):
+                    continue
+                if filters.get("arabic") and not arabic_re.search(row.get("first_name") or ""):
+                    continue
+                if filters.get("english") and arabic_re.search(row.get("first_name") or ""):
+                    continue
+                filtered_rows.append(row)
+            rows = filtered_rows
+
+        if not rows:
+            raise ValueError("لم يتم العثور على أي أعضاء تطابق الفلاتر المحددة")
+
         mark_used(db, account, "gather", amount=len(rows))
         safe_name = source_label.replace("t.me/", "").replace("@", "").replace("/", "_").replace(" ", "_") or "gather"
         file_name = f"gather_{safe_name}_{uuid4().hex[:8]}.csv"
         file_path = _exports_dir() / file_name
-        _write_csv(file_path, rows)
+
+        # Construct fieldnames from fields if passed
+        fields = payload.get("fields")
+        fieldnames = ["user_id", "first_name", "username", "phone", "last_seen"]
+        if fields:
+            mapping = {
+                "id": "user_id",
+                "name": "first_name",
+                "username": "username",
+                "phone": "phone",
+                "last": "last_seen",
+                "bio": "bio",
+                "photo": "photo",
+                "bot": "is_bot",
+                "admin": "is_admin"
+            }
+            custom_fields = [mapping[k] for k, v in fields.items() if v and k in mapping]
+            if custom_fields:
+                fieldnames = custom_fields
+
+        _write_csv(file_path, rows, fieldnames=fieldnames)
 
         export_row = GatherExport(
             source_label=source_label,

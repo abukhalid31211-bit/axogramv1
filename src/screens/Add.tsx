@@ -195,7 +195,22 @@ function AddFromCsv() {
     try {
       const response = await apiFetch<JobStartResponse>("/add/from-export", {
         method: "POST",
-        body: JSON.stringify({ export_id: file, target_label: target, method, run_inline: queueEnabled === false }),
+        body: JSON.stringify({
+          export_id: file,
+          target_label: target,
+          method,
+          run_inline: queueEnabled === false,
+          rotation_style: accs,
+          distribution_style: dist,
+          add_limit: Number(addLimit || 5),
+          delay,
+          switch_delay: switchDelay,
+          daily_limit: Number(dailyLimit || 20),
+          smart_limit: smartLimit,
+          smart_delay: smartDelay,
+          protection,
+          stop_limit: Number(stopLimit || 500),
+        }),
       });
       show(response.message);
       if (response.mode === "finished") {

@@ -226,6 +226,14 @@ def emergency_action(payload: EmergencyAction, db: DbSession, current_user: Anno
     if action == "stop_all":
         result = emergency_stop_all(db)
         return MessageResponse(message=f"تم إيقاف جميع العمليات الجارية ({result['stopped_jobs']} مهمة)")
+    if action == "freeze":
+        _save_setting(db, "accounts_frozen", "true")
+        write_audit_log(db, action="security.emergency.freeze", message="تجميد الحسابات مؤقتاً لمنع الحظر", actor_user_id=current_user.id, entity_type="security", entity_id="emergency", level="warn")
+        return MessageResponse(message="تم تجميد جميع الحسابات بنجاح لمنع الاتصال وتفادي الحظر")
+    if action == "unfreeze":
+        _save_setting(db, "accounts_frozen", "false")
+        write_audit_log(db, action="security.emergency.unfreeze", message="إلغاء تجميد الحسابات وإعادة تفعيل الاتصالات", actor_user_id=current_user.id, entity_type="security", entity_id="emergency", level="warn")
+        return MessageResponse(message="تم إلغاء تجميد الحسابات وإعادة تفعيل الاتصالات")
     if action == "lock_system":
         result = emergency_lock_system(db)
         return MessageResponse(message=f"تم قفل النظام وإيقاف {result['stopped_jobs']} مهمة")

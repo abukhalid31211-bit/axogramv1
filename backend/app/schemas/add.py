@@ -48,6 +48,16 @@ class AddFromExportJobPayload(BaseModel):
     target_label: str
     method: str = "direct"
     run_inline: bool = False
+    rotation_style: str | None = None
+    distribution_style: str | None = None
+    add_limit: int | None = None
+    delay: str | None = None
+    switch_delay: str | None = None
+    daily_limit: int | None = None
+    smart_limit: bool | None = None
+    smart_delay: bool | None = None
+    protection: dict | None = None
+    stop_limit: int | None = None
 
 
 class AddManualJobPayload(BaseModel):
