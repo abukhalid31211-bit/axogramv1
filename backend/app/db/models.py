@@ -198,7 +198,7 @@ class Account(Base):
     add_count: Mapped[int] = mapped_column(Integer, default=0)
     dm_count: Mapped[int] = mapped_column(Integer, default=0)
     flood_waits_count: Mapped[int] = mapped_column(Integer, default=0)
-    telegram_created_at: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    telegram_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     data_center: Mapped[str | None] = mapped_column(String(10), nullable=True)
     device_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     session_file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
