@@ -995,6 +995,27 @@ export function AccountDetail({ id }: { id: string }) {
             <Button variant="danger" className="w-full" icon={<Trash2 className="h-4 w-4" />} onClick={() => setConfirmDel(true)}>حذف هذا الحساب</Button>
             <Button className="w-full" onClick={() => push(["accounts", "list"])}>رجوع للقائمة</Button>
           </div>
+
+          <div className="card p-5 space-y-2">
+            <SectionTitle>📤 تصدير جلسة هذا الحساب</SectionTitle>
+            <Button className="w-full" variant="primary" onClick={async () => {
+              try {
+                await downloadApiFile(`/accounts/${account.id}/export/session`, `${account.phone}.session`);
+                show("✅ تم تنزيل ملف .session بنجاح");
+              } catch (err) {
+                show(err instanceof Error ? err.message : "تعذر تنزيل الجلسة", "danger");
+              }
+            }}>💾 ملف .session</Button>
+            <Button className="w-full" onClick={async () => {
+              try {
+                const res = await apiFetch<{ string_session: string }>(`/accounts/${account.id}/export/string-session`);
+                await navigator.clipboard.writeText(res.string_session);
+                show("🔑 تم نسخ String Session للحافظة!");
+              } catch (err) {
+                show(err instanceof Error ? err.message : "تعذر استخراج الجلسة النصية", "danger");
+              }
+            }}>🔑 String Session</Button>
+          </div>
         </div>
       </div>
 

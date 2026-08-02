@@ -32,6 +32,8 @@ class GatherExtractJobPayload(BaseModel):
     limit: int = 1000
     account_id: int | None = None
     run_inline: bool = False
+    filters: dict | None = None
+    fields: dict | None = None
 
 
 class GatherMergeJobPayload(BaseModel):

@@ -181,6 +181,8 @@ function PublicGather() {
           limit: selectedLimit,
           account_id: account === "single" ? selectedAccountId : null,
           run_inline: queueEnabled === false,
+          filters,
+          fields,
         }),
       });
       show(response.message);

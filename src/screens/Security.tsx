@@ -659,6 +659,8 @@ function EmergencyResponse() {
     lock: { title: "قفل النظام", msg: "يوقف كل شيء + يحفظ التقدم + يمنع أي عمليات جديدة." },
     delete: { title: "حذف طارئ للجلسات", msg: "للأمان: سيتم حذف الجلسات الحساسة نهائياً." },
     restart: { title: "إعادة تشغيل الخدمة", msg: "ستُعاد تشغيل الخدمة خلال ثوانٍ." },
+    freeze: { title: "تجميد جميع الحسابات مؤقتاً", msg: "سيمنع أي عملية تواصل أو تشغيل جلسات تيليجرام تفادياً لموجات الحظر الشامل." },
+    unfreeze: { title: "إلغاء تجميد الحسابات", msg: "سيعيد السماح بتشغيل الجلسات وبدء الاتصال بتيليجرام بشكل طبيعي." },
   };
 
   const exec = async (action: string, message?: string) => {
@@ -678,6 +680,8 @@ function EmergencyResponse() {
         <Button variant="danger" onClick={() => setConfirm("stop")}>🔴 إيقاف جميع العمليات الآن</Button>
         <Button variant="danger" onClick={() => setConfirm("lock")}>🔒 قفل النظام</Button>
         <Button variant="danger" onClick={() => setConfirm("delete")}>🗑️ حذف طارئ للجلسات الحساسة</Button>
+        <Button variant="danger" onClick={() => setConfirm("freeze")}>🛡️ تجميد جميع الحسابات مؤقتاً</Button>
+        <Button variant="warn" onClick={() => setConfirm("unfreeze")}>🔓 إلغاء تجميد الحسابات</Button>
         <Button variant="warn" onClick={async () => { try { await exec("unlock_system"); show("تم فتح النظام"); } catch (err) { show(err instanceof Error ? err.message : "تعذر الفتح", "danger"); } }}>🔓 فتح النظام (إلغاء القفل)</Button>
         <Button variant="warn" onClick={() => setConfirm("restart")}>🔄 إعادة تشغيل الخدمة</Button>
       </div>
@@ -688,7 +692,7 @@ function EmergencyResponse() {
       </div>
       <div className="mt-4"><Button onClick={() => push(["security"])}>رجوع</Button></div>
       <ConfirmDialog open={confirm !== null} danger title={confirm ? confirmMap[confirm].title : ""} message={confirm ? confirmMap[confirm].msg : ""}
-        onConfirm={() => void exec(confirm === "stop" ? "stop_all" : confirm === "lock" ? "lock_system" : confirm === "delete" ? "delete_sessions" : "restart")} onCancel={() => setConfirm(null)} />
+        onConfirm={() => void exec(confirm === "stop" ? "stop_all" : confirm === "lock" ? "lock_system" : confirm === "delete" ? "delete_sessions" : confirm === "freeze" ? "freeze" : confirm === "unfreeze" ? "unfreeze" : "restart")} onCancel={() => setConfirm(null)} />
       {node}
     </div>
   );

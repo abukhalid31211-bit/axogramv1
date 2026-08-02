@@ -112,6 +112,9 @@ def _proxy_kwargs(proxy: Proxy | None) -> dict:
 def build_client_for_account(db: Session, account: Account, api_id: int | None = None, api_hash: str | None = None) -> TelegramClient:
     from app.services.settings import get_setting_value
 
+    if get_setting_value(db, "accounts_frozen") == "true":
+        raise ValueError("الحسابات مجمّدة مؤقتاً لدواعي الأمان ومنعاً للحظر")
+
     if not account.session_file_path:
         raise ValueError("الحساب لا يملك جلسة تيليجرام محفوظة")
     session_path = Path(account.session_file_path)

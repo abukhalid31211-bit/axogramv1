@@ -83,7 +83,7 @@ def add_from_export_run(run_id: str, payload: dict) -> dict:
         if not target_label:
             raise ValueError("حدد المجموعة المستهدفة (رابط أو @username)")
         users = _read_export_users(db, export_id)
-        return _run_add_loop(db, run_id, users, target_label, method, actor_user_id)
+        return _run_add_loop(db, run_id, users, target_label, method, actor_user_id, payload=payload)
     finally:
         db.close()
 
@@ -100,7 +100,7 @@ def add_manual_run(run_id: str, payload: dict) -> dict:
         if not raw_users:
             raise ValueError("أدخل مستخدماً واحداً على الأقل")
         users = [{"user_id": "", "username": u, "phone": "", "first_name": ""} for u in raw_users]
-        return _run_add_loop(db, run_id, users, target_label, method, actor_user_id)
+        return _run_add_loop(db, run_id, users, target_label, method, actor_user_id, payload=payload)
     finally:
         db.close()
 
@@ -125,7 +125,7 @@ def add_smart_run(run_id: str, payload: dict) -> dict:
         jobrunner.finish_job(inner_run, result=result)
         users = _read_export_users(db, result["export_id"])
         jobrunner.update_progress(run_id, 10, "بدأت الإضافة...")
-        return _run_add_loop(db, run_id, users, target_label, method, actor_user_id, source_label=source_label)
+        return _run_add_loop(db, run_id, users, target_label, method, actor_user_id, source_label=source_label, payload=payload)
     finally:
         db.close()
 
@@ -158,13 +158,36 @@ def add_multi_run(run_id: str, payload: dict) -> dict:
                 users = _read_export_users(db, merge_result["export_id"])
         if group_links:
             users.extend({"user_id": "", "username": link, "phone": "", "first_name": ""} for link in group_links)
-        return _run_add_loop(db, run_id, users, target_label, method, actor_user_id, source_label="متعدد المصادر")
+        return _run_add_loop(db, run_id, users, target_label, method, actor_user_id, source_label="متعدد المصادر", payload=payload)
     finally:
         db.close()
 
 
-def _run_add_loop(db: Session, run_id: str, users: list[dict[str, str]], target_label: str, method: str, actor_user_id: int | None, source_label: str | None = None) -> dict:
+def _run_add_loop(db: Session, run_id: str, users: list[dict[str, str]], target_label: str, method: str, actor_user_id: int | None, source_label: str | None = None, payload: dict | None = None) -> dict:
     op_settings = load_op_settings(db, "defaults")
+    # Override settings with payload if passed
+    if payload:
+        delay_val = payload.get("delay")
+        if delay_val and "-" in delay_val:
+            try:
+                parts = delay_val.split("-")
+                op_settings["delay_min"] = parts[0].strip()
+                op_settings["delay_max"] = parts[1].strip()
+            except Exception:
+                pass
+        
+        switch_delay = payload.get("switch_delay")
+        if switch_delay:
+            op_settings["switch_delay"] = str(switch_delay)
+            
+        daily_limit = payload.get("daily_limit")
+        if daily_limit:
+            op_settings["daily_limit"] = str(daily_limit)
+            
+        add_limit = payload.get("add_limit")
+        if add_limit:
+            op_settings["switch_count"] = str(add_limit)
+
     if not users:
         raise ValueError("لا يوجد مستخدمون للإضافة")
     total = len(users)

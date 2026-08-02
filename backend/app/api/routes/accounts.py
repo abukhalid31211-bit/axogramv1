@@ -443,3 +443,44 @@ def _save_setting(db: Session, key: str, value: str) -> None:
     else:
         db.add(AppSetting(key=key, value_encrypted=encrypt_value(value), is_secret=False))
     db.commit()
+
+
+@router.get("/{account_id}/export/session")
+def export_account_session(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]):
+    account = _visible_account_or_404(db, account_id, current_user)
+    if not account.session_file_path:
+        raise HTTPException(status_code=404, detail="ملف الجلسة غير موجود لهذا الحساب")
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+    path = Path(account.session_file_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="ملف الجلسة غير موجود على السيرفر")
+    return FileResponse(path, media_type="application/octet-stream", filename=f"{account.phone}.session")
+
+
+@router.get("/{account_id}/export/string-session")
+def export_account_string_session(account_id: int, db: DbSession, current_user: Annotated[User, Depends(get_current_active_user)]) -> dict:
+    account = _visible_account_or_404(db, account_id, current_user)
+    if not account.session_file_path:
+        raise HTTPException(status_code=404, detail="ملف الجلسة غير موجود لهذا الحساب")
+    try:
+        from telethon.sessions import StringSession, SQLiteSession
+        from pathlib import Path
+        path = Path(account.session_file_path)
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="ملف الجلسة غير موجود على السيرفر")
+        session = SQLiteSession(str(path))
+        dc_id = session.dc_id
+        server_address = session.server_address
+        port = session.port
+        auth_key = session.auth_key
+        if not auth_key:
+            raise ValueError("مفتاح المصادقة فارغ في الجلسة")
+        s = StringSession()
+        s.set_dc(dc_id, server_address, port)
+        s.auth_key = auth_key
+        string_val = s.save()
+        return {"string_session": string_val}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"تعذر توليد String Session: {exc}")
+
