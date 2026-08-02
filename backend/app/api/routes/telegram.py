@@ -51,7 +51,7 @@ async def request_code(
     try:
         api_id, api_hash = get_telegram_credentials(db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="يجب ضبط Telegram API ID و API Hash من الإعدادات أولاً") from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="يجب على مالك الموقع ضبط Telegram API ID و API Hash من لوحة الإدارة أولاً") from exc
 
     client = build_client(payload.phone, api_id, api_hash)
     try:
@@ -94,7 +94,7 @@ async def verify_code(
     try:
         api_id, api_hash = get_telegram_credentials(db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="يجب ضبط Telegram API ID و API Hash من الإعدادات أولاً") from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="يجب على مالك الموقع ضبط Telegram API ID و API Hash من لوحة الإدارة أولاً") from exc
 
     auth_session = (
         db.query(TelegramAuthSession)

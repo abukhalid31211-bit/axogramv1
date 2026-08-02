@@ -292,7 +292,7 @@ def test_send(campaign_id: int, payload: CampaignTestSendPayload, db: DbSession,
     try:
         api_id, api_hash = get_telegram_credentials(db)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="اضبط Telegram API ID و API Hash أولاً") from exc
+        raise HTTPException(status_code=400, detail="يجب على مالك الموقع ضبط Telegram API ID و API Hash من لوحة الإدارة أولاً") from exc
     account = None
     if payload.account_id:
         account = db.query(Account).filter(Account.id == payload.account_id).first()

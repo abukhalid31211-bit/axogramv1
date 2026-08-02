@@ -188,7 +188,7 @@ def run_dm_campaign(run_id: str, payload: dict) -> dict:
         try:
             api_id, api_hash = get_telegram_credentials(db)
         except ValueError as exc:
-            raise ValueError("اضبط Telegram API ID و API Hash من الإعدادات أولاً") from exc
+            raise ValueError("يجب على مالك الموقع ضبط Telegram API ID و API Hash من لوحة الإدارة أولاً") from exc
 
         result = asyncio.run(
             _run_dm_loop(
@@ -402,7 +402,7 @@ def run_group_campaign(run_id: str, payload: dict) -> dict:
         try:
             api_id, api_hash = get_telegram_credentials(db)
         except ValueError as exc:
-            raise ValueError("اضبط Telegram API ID و API Hash من الإعدادات أولاً") from exc
+            raise ValueError("يجب على مالك الموقع ضبط Telegram API ID و API Hash من لوحة الإدارة أولاً") from exc
 
         result = asyncio.run(
             _run_group_loop(

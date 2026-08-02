@@ -289,7 +289,7 @@ function AddAccount() {
         {mode === "telegram" && (
           <>
             {!telegramStatus?.configured && (
-              <Alert tone="warn" title="إعدادات تيليجرام غير مكتملة">اذهب إلى الإعدادات وضع Telegram API ID و API Hash أولاً قبل الربط الفعلي.</Alert>
+              <Alert tone="warn" title="إعدادات تيليجرام غير مكتملة">لم يتم ضبط Telegram API ID و API Hash بعد في النظام. يرجى من مالك الموقع (الإدارة) ضبطها من لوحة الإدارة أولاً قبل ربط الحسابات.</Alert>
             )}
             {otpStep === 1 && (
               <div className="card p-6 space-y-4">

@@ -139,7 +139,7 @@ def build_bot_client(token: str, api_id: int | None = None, api_hash: str | None
         except Exception:
             api_id, api_hash = None, None
     if not api_id or not api_hash:
-        raise ValueError("API ID/Hash غير مضبوطين لإرسال إشعارات البوت")
+        raise ValueError("API ID/Hash غير مضبوطين في لوحة الإدارة لإرسال إشعارات البوت")
     return TelegramClient(StringSession(), int(api_id), api_hash, device_model="Axogram Notifier")
 
 

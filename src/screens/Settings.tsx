@@ -194,7 +194,7 @@ function ApiSettings() {
       <PageHeader title="إعدادات API تيليجرام" icon={<KeyRound className="h-5 w-5" />} />
       {s.loading ? <Spinner label="جاري التحميل..." /> : (
         <div className="mx-auto max-w-lg card p-6 space-y-4">
-          <Alert tone="info" title="هذه بيانات التطبيق — تُضبط مرة واحدة">يمكنك الحصول عليها من my.telegram.org → API Development Tools.</Alert>
+          <Alert tone="info" title="هذه بيانات التطبيق للنظام بالكامل — تُضبط مرة واحدة">تُطبق Telegram API ID و API Hash على جميع المشتركين والحسابات في النظام. يمكنك أيضاً ضبطها مباشرة من لوحة الإدارة (أو من هنا إذا كنت الإدارة).</Alert>
           <InlineEdit label="معرف API (API ID)" value={s.form.telegram_api_id} onSave={(v) => s.set("telegram_api_id", v)} placeholder="12345678" />
           <InlineEdit label="تجزئة API (API Hash)" value={s.form.telegram_api_hash} onSave={(v) => s.set("telegram_api_hash", v)} placeholder="a1b2c3d4e5f6" />
           <SaveBar onSave={() => void s.handleSave()} saving={s.saving} onBack={() => push(["settings"])} />

@@ -18,5 +18,9 @@ def get_telegram_credentials(db: Session) -> tuple[int, str]:
     api_id_raw = get_setting_value(db, "telegram_api_id")
     api_hash = get_setting_value(db, "telegram_api_hash")
     if not api_id_raw or not api_hash:
-        raise ValueError("Telegram API credentials are not configured")
-    return int(api_id_raw), api_hash
+        raise ValueError("يجب من مالك الموقع (الإدارة) ضبط Telegram API ID و API Hash من لوحة الإدارة أولاً")
+    try:
+        api_id_int = int(str(api_id_raw).strip())
+    except ValueError as exc:
+        raise ValueError("معرف Telegram API ID يجب أن يكون رقماً صحيحاً") from exc
+    return api_id_int, str(api_hash).strip()
